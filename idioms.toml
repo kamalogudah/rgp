@@ -1,0 +1,15 @@
+# Contract: docs/configuration.md#idioms-toml
+schema_version = 1
+
+[[idiom]]
+id = "manual_collection_transformation"
+title = "Manual collection transformation"
+topic = "collections"
+required_constructs = ["each", "append"]
+comparison_idiom = "map"
+
+[[idiom]]
+id = "map"
+title = "Map transformation"
+topic = "collections"
+required_constructs = ["map"]

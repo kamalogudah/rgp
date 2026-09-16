@@ -334,9 +334,15 @@ Possible integration surfaces should be evaluated in this order:
 
 This keeps fx upgrades from forcing changes throughout RGP.
 
+`FxAdapter` is the accepted first adapter behind `CodingAgent`; it is not a
+decision to embed fx or make it a runtime dependency. That integration choice
+is deferred until the analyzer is stable and a dedicated follow-up ADR has
+accepted a specific boundary. Until then, the deterministic CLI/core remains
+independent and must operate without an agent installation or network access.
+
 ---
 
-# 5. Why fx Is the Initial Adapter
+## 4.6 Why fx Is the Initial Adapter
 
 `vercel-labs/fx` is a particularly relevant reference because it is
 itself written in Zig and describes itself as a small, open, embeddable,
@@ -348,9 +354,9 @@ subagents, ACP, and native/WebAssembly embedding.
 RGP should borrow the **agent harness architecture**, not delegate Ruby
 understanding to it.
 
-## 5.1 What RGP should learn from fx
+### 4.6.1 What RGP should learn from fx
 
-### Model-provider abstraction
+#### Model-provider abstraction
 
 RGP should avoid coupling tutoring to one AI provider. The agent layer
 should have a provider interface so users can eventually choose:
@@ -362,7 +368,7 @@ should have a provider interface so users can eventually choose:
 
 The deterministic RGP engine must work without an LLM.
 
-### Interactive shell
+#### Interactive shell
 
 RGP should eventually offer:
 
@@ -380,7 +386,7 @@ rgp> why map instead of each here?
 The shell can maintain context about the repository, current lesson,
 learner level, and prior questions.
 
-### One-shot interface
+#### One-shot interface
 
 The Unix-style interface should remain composable:
 
@@ -399,7 +405,7 @@ rgp analyze . --json
 rgp report iteration --json
 ```
 
-### Tool-oriented agent
+#### Tool-oriented agent
 
 The tutor should not receive an entire repository and guess. It should
 call deterministic RGP tools such as:
@@ -420,7 +426,7 @@ explain_ast_region
 
 This makes the AI a consumer of RGP evidence.
 
-### Sessions
+#### Sessions
 
 Learning requires continuity. Sessions should preserve:
 
@@ -432,7 +438,7 @@ Learning requires continuity. Sessions should preserve:
 -   repository being explored;
 -   prior explanations.
 
-### Context compaction
+#### Context compaction
 
 Long learning and code-exploration sessions will exceed model context.
 RGP can adopt the fx principle of compacting older interaction state
@@ -441,7 +447,7 @@ while retaining structured learner state separately.
 Critical learning state must live in the database, not only in
 conversational context.
 
-### Permissions
+#### Permissions
 
 An explanatory tutor should have fewer permissions than an agent editing
 a repository.
@@ -460,7 +466,7 @@ For a beginner, the default should be `learn`: inspect code, explain,
 ask questions, run exercises, but do not automatically rewrite the
 learner's solution.
 
-### Skills
+#### Skills
 
 RGP can expose teaching behaviors as skills:
 
@@ -476,13 +482,13 @@ skills/
   interview-practice/
 ```
 
-### MCP / external tools
+#### MCP / external tools
 
 Later, RGP can expose its corpus as an MCP server or consume external
 tools through MCP. This makes RGP's empirical Ruby knowledge usable from
 editors and other agents.
 
-### Subagents
+#### Subagents
 
 Subagents are useful later for complex repository learning:
 
@@ -498,7 +504,7 @@ Ruby Tutor
 
 They should not be required for the MVP.
 
-### Embedding
+#### Embedding
 
 fx's embeddability is especially relevant if RGP later has:
 
@@ -508,7 +514,7 @@ fx's embeddability is especially relevant if RGP later has:
 -   a classroom platform;
 -   a WASM-based browser experience.
 
-## 5.2 Integration decision
+### 4.6.2 Integration decision
 
 Do **not** begin by forking fx and putting all RGP functionality inside
 it.
@@ -979,9 +985,15 @@ based on Prism node names.
 
 This taxonomy should live in `taxonomy.toml`, not be hardcoded.
 
+The schema-version rules, validation requirements, and diagnostics for this
+file are normative in [`docs/configuration.md`](docs/configuration.md). The
+example below illustrates the same version-1 contract.
+
 Example:
 
 ``` toml
+schema_version = 1
+
 [[topic]]
 id = "collections.cardinality"
 title = "Collection Cardinality"
@@ -1045,6 +1057,10 @@ rgp report iteration --ruby ">=3.2"
 
 Each corpus snapshot records exact commit SHAs so analysis is
 reproducible.
+
+`corpus.toml` is the versioned source of this selection. Its pinned-revision,
+offline, schema, and invalid-input rules are normative in
+[`docs/configuration.md`](docs/configuration.md).
 
 ------------------------------------------------------------------------
 
@@ -1570,6 +1586,7 @@ rgp corpus sync
 ANALYSIS
 
 rgp analyze <repo-or-path>
+rgp analyze
 rgp analyze --corpus
 
 
@@ -1603,6 +1620,14 @@ AGENT
 rgp
 rgp ask "Why does this project use each_with_object here?"
 ```
+
+`rgp analyze` with no arguments is exactly an alias for `rgp analyze
+--corpus`: both analyze all configured, locally materialized corpus snapshots
+at their pinned revisions. Neither silently analyzes the current directory or
+fetches a repository. `rgp analyze <repo-or-path>` is the explicit one-off
+mode. If a corpus snapshot is absent, the command reports the missing pinned
+revision and directs the user to run `rgp corpus sync`; it never falls back to
+a moving branch or remote checkout.
 
 ------------------------------------------------------------------------
 
@@ -1716,7 +1741,7 @@ Deliver:
 -   formatter/lint/test workflow;
 -   basic CLI command router;
 -   ADR accepted;
--   corpus/taxonomy configuration formats;
+-   versioned corpus, taxonomy, and idiom configuration contracts;
 -   libprism build/link spike.
 
 Acceptance:
@@ -1786,7 +1811,10 @@ Acceptance:
 rgp corpus add https://github.com/rack/rack
 rgp corpus sync
 rgp analyze --corpus
+rgp analyze
 ```
+
+The two analysis commands above are aliases; both require pinned snapshots.
 
 ## Phase 3 --- Construct statistics (Weeks 6--7)
 
@@ -1981,6 +2009,10 @@ Do not duplicate analyzer logic in the web layer.
 
 The first meaningful release should NOT require AI.
 
+This is the **full Learning MVP gate**, reached after Phase 6. It is distinct
+from the narrower First Analyzer Gate in section 35, which establishes
+trustworthy corpus evidence before idiom detection and learning work begin.
+
 MVP:
 
 ``` text
@@ -2004,6 +2036,8 @@ This proves the central thesis:
 > used to improve Ruby learning.
 
 Agentic tutoring comes after that foundation.
+The full Learning MVP includes no fx runtime dependency, agent provider, or
+network requirement for its core local workflow; those remain later phases.
 
 ------------------------------------------------------------------------
 
@@ -2290,7 +2324,11 @@ source observations.
 
 # 35. First Development Milestone
 
-The first implementation target should be intentionally small:
+## First Analyzer Gate
+
+This gate follows Phase 3 and is intentionally smaller than the full Learning
+MVP. It proves reproducible analysis; it does not include idiom detection,
+lessons, practice, agents, or a direct fx dependency.
 
 ``` text
 rgp corpus add <github-url>
@@ -2341,7 +2379,16 @@ rescue
 ```
 
 Once these statistics are trustworthy, implement idiom detection and
-learning.
+learning. The gate passes only when:
+
+- the version-1 corpus, taxonomy, and idiom contracts validate with actionable
+  diagnostics;
+- `rgp analyze` and `rgp analyze --corpus` analyze the same pinned local
+  snapshots, while a positional target remains explicit;
+- observations and reports retain repository ID, source, commit SHA,
+  configuration schema version, and analyzer version; and
+- the analyzer can run against an already materialized corpus without network
+  access.
 
 ------------------------------------------------------------------------
 
