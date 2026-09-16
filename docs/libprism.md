@@ -35,9 +35,7 @@ zig build test
 
 The integration test accepts a small Ruby program, rejects malformed Ruby, and
 asserts that the linked C library reports `1.9.0`. CI runs those checks on
-Linux, macOS, and Windows using the pinned Zig toolchain. This Phase 0 spike
-does not expose raw AST nodes or ownership; Phase 1 must add a safe Zig parser
-wrapper before analyzer work starts.
+Linux, macOS, and Windows using the pinned Zig toolchain. The Phase 1 wrapper is exposed as `rgp.prism`: `parse` returns an owning `Document` with copied source and path, a root-node view, and copied diagnostics. Call `Document.deinit` to destroy the tree before its parser and source. Syntax and encoding failures are structured diagnostics rather than crashes or opaque Zig errors.
 
 ## Upgrade procedure
 
