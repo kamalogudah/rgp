@@ -71,6 +71,11 @@ pub fn build(b: *std.Build) void {
     });
     mod.addIncludePath(b.path("vendor/libprism/include"));
     mod.linkLibrary(libprism);
+    const parser_fixtures = b.addModule("parser_fixtures", .{
+        .root_source_file = b.path("fixtures/parser.zig"),
+        .target = target,
+    });
+    mod.addImport("parser_fixtures", parser_fixtures);
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
