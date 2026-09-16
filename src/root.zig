@@ -8,6 +8,8 @@ const std = @import("std");
 /// A safe parser/AST ownership API belongs to Phase 1; this deliberately only
 /// exposes the C library's boolean parse-success query.
 pub const prism_spike = @import("prism_spike.zig");
+/// Safe libprism parsing with explicit source, tree, and parser ownership.
+pub const prism = @import("prism/parser.zig");
 
 pub const version = "0.1.0-dev";
 
