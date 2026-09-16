@@ -3,7 +3,7 @@ const c = @import("bindings.zig").c;
 
 pub const ParseOptions = struct { path: []const u8 = "<memory>" };
 pub const Severity = enum { syntax_error, warning };
-pub const Location = struct { start_offset: usize, end_offset: usize, line: usize, column: usize };
+pub const Location = struct { start_offset: usize, end_offset: usize, line: usize, column: usize, end_line: usize, end_column: usize };
 pub const Diagnostic = struct { severity: Severity, message: []const u8, location: Location };
 
 /// Non-owning AST view. It must not outlive its Document.
@@ -86,7 +86,7 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8, options: ParseOpti
 }
 
 fn copyDiagnostics(allocator: std.mem.Allocator, source: []const u8, parser: *const c.pm_parser_t) ![]Diagnostic {
-    const error_count = parser.syntax_error_list.size;
+    const error_count = parser.error_list.size;
     const warning_count = parser.warning_list.size;
     const result = try allocator.alloc(Diagnostic, error_count + warning_count);
     var index: usize = 0;
@@ -94,7 +94,7 @@ fn copyDiagnostics(allocator: std.mem.Allocator, source: []const u8, parser: *co
         for (result[0..index]) |diagnostic| allocator.free(diagnostic.message);
         allocator.free(result);
     }
-    index = try copyDiagnosticList(allocator, source, result, index, parser.syntax_error_list, .syntax_error);
+    index = try copyDiagnosticList(allocator, source, result, index, parser.error_list, .syntax_error);
     _ = try copyDiagnosticList(allocator, source, result, index, parser.warning_list, .warning);
     return result;
 }
@@ -102,7 +102,8 @@ fn copyDiagnostics(allocator: std.mem.Allocator, source: []const u8, parser: *co
 fn copyDiagnosticList(allocator: std.mem.Allocator, source: []const u8, result: []Diagnostic, start_index: usize, list: c.pm_list_t, severity: Severity) !usize {
     var index = start_index;
     var next = list.head;
-    while (next) |list_node| : (next = list_node.next) {
+    while (next != null) : (next = next[0].next) {
+        const list_node = next;
         const raw: *const c.pm_diagnostic_t = @ptrCast(list_node);
         result[index] = .{
             .severity = severity,
@@ -114,16 +115,24 @@ fn copyDiagnosticList(allocator: std.mem.Allocator, source: []const u8, result: 
     return index;
 }
 
+fn positionAt(source: []const u8, offset: usize) struct { line: usize, column: usize } {
+    const prefix = source[0..offset];
+    const last_newline = std.mem.lastIndexOfScalar(u8, prefix, '\n');
+    return .{ .line = std.mem.count(u8, prefix, "\n") + 1, .column = offset - (if (last_newline) |newline| newline + 1 else 0) + 1 };
+}
+
 fn locationFromPointers(source: []const u8, start: [*c]const u8, end: [*c]const u8) Location {
     const start_offset = @intFromPtr(start) - @intFromPtr(source.ptr);
     const end_offset = @intFromPtr(end) - @intFromPtr(source.ptr);
-    const prefix = source[0..start_offset];
-    const last_newline = std.mem.lastIndexOfScalar(u8, prefix, '\n');
+    const start_position = positionAt(source, start_offset);
+    const end_position = positionAt(source, end_offset);
     return .{
         .start_offset = start_offset,
         .end_offset = end_offset,
-        .line = std.mem.count(u8, prefix, "\n") + 1,
-        .column = start_offset - (if (last_newline) |offset| offset + 1 else 0) + 1,
+        .line = start_position.line,
+        .column = start_position.column,
+        .end_line = end_position.line,
+        .end_column = end_position.column,
     };
 }
 
@@ -133,7 +142,7 @@ test "valid Ruby has a tree and no diagnostics" {
     try std.testing.expect(document.success());
     try std.testing.expectEqualStrings("fixtures/answer.rb", document.path());
     try std.testing.expectEqual(@as(usize, 0), document.diagnostics().len);
-    try std.testing.expectEqualStrings("ProgramNode", document.root().kind());
+    try std.testing.expectEqualStrings("PM_PROGRAM_NODE", document.root().kind());
 }
 
 test "invalid Ruby retains source and file diagnostics" {

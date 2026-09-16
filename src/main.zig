@@ -23,7 +23,7 @@ pub fn main(init: std.process.Init) !void {
     var stdout: Io.File.Writer = .init(.stdout(), init.io, &stdout_buffer);
     const writer = &stdout.interface;
 
-    const exit_code = run(args[1..], writer) catch |err| switch (err) {
+    const exit_code = run(args[1..], writer, init.io, init.arena.allocator()) catch |err| switch (err) {
         error.unknown_command => blk: {
             try writer.print("error: unknown command `{s}`. Run `rgp --help` for usage.\n", .{args[1]});
             break :blk @as(u8, 2);
@@ -39,7 +39,16 @@ pub fn main(init: std.process.Init) !void {
     if (exit_code != 0) std.process.exit(exit_code);
 }
 
-fn run(args: []const []const u8, writer: *Io.Writer) !u8 {
+fn run(args: []const []const u8, writer: *Io.Writer, io: Io, allocator: std.mem.Allocator) !u8 {
+    if (args.len > 0 and std.mem.eql(u8, args[0], "parse")) {
+        if (args.len != 2) return error.unexpected_argument;
+        const source = try Io.Dir.cwd().readFileAlloc(io, args[1], allocator, .limited(std.math.maxInt(usize)));
+        defer allocator.free(source);
+        var document = try rgp.prism.parse(allocator, source, .{ .path = args[1] });
+        defer document.deinit();
+        try rgp.traversal.writeJson(&document, writer);
+        return 0;
+    }
     switch (try rgp.parseCommand(args)) {
         .help => try writer.writeAll(usage),
         .version => try writer.print("rgp {s}\n", .{rgp.version}),
