@@ -75,6 +75,9 @@
         "build.zig.zon",
         "README.md",
         ".zigversion",
+        "corpus.toml",
+        "taxonomy.toml",
+        "idioms.toml",
         "src",
         // For example...
         //"LICENSE",

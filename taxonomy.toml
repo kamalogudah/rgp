@@ -1,0 +1,12 @@
+# Contract: docs/configuration.md#taxonomy-toml
+schema_version = 1
+
+[[topic]]
+id = "collections"
+title = "Collections"
+
+[[topic]]
+id = "collections.cardinality"
+title = "Collection Cardinality"
+parent = "collections"
+constructs = ["size", "length", "count"]

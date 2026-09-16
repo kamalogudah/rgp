@@ -1,0 +1,14 @@
+# Contract: docs/configuration.md#corpus-toml
+schema_version = 1
+
+[corpus]
+# This offline fixture demonstrates the contract; replace it with a real pinned corpus.
+# Source data remains reproducible from immutable revisions.
+offline = true
+
+[[repository]]
+id = "rgp-fixture"
+source = "."
+revision = "e8cbd95f6fe039a95d8e7a1c86ea4c14a96bbe65"
+include = ["fixtures/**/*.rb"]
+exclude = ["vendor/**", "tmp/**"]

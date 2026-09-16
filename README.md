@@ -9,6 +9,21 @@ and use that deterministic evidence for reports and learning workflows.
 RGP supports **Zig 0.16.0**. The exact version is pinned in `.zigversion` and
 the package metadata declares the same minimum supported version.
 
+## CI targets
+
+CI verifies formatting, builds, and tests with that exact Zig version on the
+native GitHub-hosted runners for Linux (`ubuntu-latest`), macOS
+(`macos-latest`), and Windows (`windows-latest`). There are currently no
+third-party Zig package dependencies, so the checked-in source and pinned
+toolchain are sufficient for the core workflow to run offline after Zig is
+installed.
+
+## Configuration contracts
+
+The versioned corpus, taxonomy, and idiom configuration contracts—including
+offline behavior and required diagnostics—are documented in
+[`docs/configuration.md`](docs/configuration.md).
+
 ## Local workflow
 
 ```sh
