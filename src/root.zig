@@ -4,6 +4,10 @@
 //! storage, learning, and agent modules belong here as they are introduced.
 
 const std = @import("std");
+/// Narrow Phase 0 proof that the vendored libprism C ABI is usable from Zig.
+/// A safe parser/AST ownership API belongs to Phase 1; this deliberately only
+/// exposes the C library's boolean parse-success query.
+pub const prism_spike = @import("prism_spike.zig");
 
 pub const version = "0.1.0-dev";
 
@@ -52,4 +56,10 @@ test "parse version commands" {
 test "reject invalid command arguments" {
     try std.testing.expectError(error.unknown_command, parseCommand(&.{"analyze"}));
     try std.testing.expectError(error.unexpected_argument, parseCommand(&.{ "--version", "extra" }));
+}
+
+test "libprism parses a tiny Ruby program through Zig C linkage" {
+    try std.testing.expectEqualStrings("1.9.0", prism_spike.version());
+    try std.testing.expect(prism_spike.parses("answer = 40 + 2\nputs answer\n"));
+    try std.testing.expect(!prism_spike.parses("def incomplete(\n"));
 }

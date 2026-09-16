@@ -9,6 +9,11 @@ and use that deterministic evidence for reports and learning workflows.
 RGP supports **Zig 0.16.0**. The exact version is pinned in `.zigversion` and
 the package metadata declares the same minimum supported version.
 
+## libprism
+
+The pinned, vendored libprism C source, MIT license, offline build approach,
+verification, and upgrade procedure are in [`docs/libprism.md`](docs/libprism.md).
+
 ## CI targets
 
 CI verifies formatting, builds, and tests with that exact Zig version on the

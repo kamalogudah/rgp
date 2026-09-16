@@ -16,6 +16,35 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+
+    // libprism is vendored at the pinned upstream release documented in
+    // docs/libprism.md. Keeping its C sources in-tree makes the core build
+    // reproducible and usable offline once this repository is checked out.
+    const libprism = b.addLibrary(.{
+        .name = "prism",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    libprism.root_module.addIncludePath(b.path("vendor/libprism/include"));
+    libprism.root_module.addCSourceFiles(.{
+        .files = &.{
+            "vendor/libprism/src/diagnostic.c",      "vendor/libprism/src/encoding.c",
+            "vendor/libprism/src/node.c",            "vendor/libprism/src/options.c",
+            "vendor/libprism/src/pack.c",            "vendor/libprism/src/prettyprint.c",
+            "vendor/libprism/src/prism.c",           "vendor/libprism/src/regexp.c",
+            "vendor/libprism/src/serialize.c",       "vendor/libprism/src/static_literals.c",
+            "vendor/libprism/src/token_type.c",      "vendor/libprism/src/util/pm_buffer.c",
+            "vendor/libprism/src/util/pm_char.c",    "vendor/libprism/src/util/pm_constant_pool.c",
+            "vendor/libprism/src/util/pm_integer.c", "vendor/libprism/src/util/pm_list.c",
+            "vendor/libprism/src/util/pm_memchr.c",  "vendor/libprism/src/util/pm_newline_list.c",
+            "vendor/libprism/src/util/pm_string.c",  "vendor/libprism/src/util/pm_strncasecmp.c",
+            "vendor/libprism/src/util/pm_strpbrk.c",
+        },
+        .flags = &.{"-std=c99"},
+    });
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -40,6 +69,8 @@ pub fn build(b: *std.Build) void {
         // which requires us to specify a target.
         .target = target,
     });
+    mod.addIncludePath(b.path("vendor/libprism/include"));
+    mod.linkLibrary(libprism);
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function

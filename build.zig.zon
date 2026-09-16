@@ -74,11 +74,13 @@
         "build.zig",
         "build.zig.zon",
         "README.md",
+        "docs",
         ".zigversion",
         "corpus.toml",
         "taxonomy.toml",
         "idioms.toml",
         "src",
+        "vendor/libprism",
         // For example...
         //"LICENSE",
         //"README.md",
