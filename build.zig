@@ -71,6 +71,7 @@ pub fn build(b: *std.Build) void {
     });
     mod.addIncludePath(b.path("vendor/libprism/include"));
     mod.linkLibrary(libprism);
+    mod.linkSystemLibrary("sqlite3", .{});
     const parser_fixtures = b.addModule("parser_fixtures", .{
         .root_source_file = b.path("fixtures/parser.zig"),
         .target = target,

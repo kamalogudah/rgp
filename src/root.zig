@@ -11,6 +11,8 @@ pub const prism_spike = @import("prism_spike.zig");
 /// Safe libprism parsing with explicit source, tree, and parser ownership.
 pub const traversal = @import("prism/traversal.zig");
 pub const prism = @import("prism/parser.zig");
+/// Versioned, provenance-preserving SQLite persistence for analyzer facts.
+pub const storage = @import("storage/sqlite.zig");
 
 pub const version = "0.1.0-dev";
 

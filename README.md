@@ -23,6 +23,16 @@ third-party Zig package dependencies, so the checked-in source and pinned
 toolchain are sufficient for the core workflow to run offline after Zig is
 installed.
 
+## SQLite storage
+
+The core stores analyzer facts in SQLite with foreign keys enabled and
+append-only migrations. A completed analysis run and its raw observations are
+written in one transaction; failed analysis can instead be retained as a
+separate failed run. Each run records RGP, Prism, classifier, taxonomy, and
+corpus snapshot versions.
+
+Run the offline migration and transaction regression coverage with `zig build test`.
+
 ## Configuration contracts
 
 The versioned corpus, taxonomy, and idiom configuration contracts—including
