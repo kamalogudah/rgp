@@ -90,6 +90,8 @@ pub const RenderOptions = struct {
     json: bool = false,
 };
 
+pub const raw_syntax_note = "These figures are raw syntax frequencies from the current corpus; they describe how often each construct appears, not semantic equivalence.";
+
 /// Render a comparison to the supplied writer.
 pub fn renderComparison(allocator: std.mem.Allocator, writer: anytype, comparison: Comparison, options: RenderOptions) !void {
     if (options.json) {
@@ -114,6 +116,8 @@ fn renderComparisonTerminal(writer: anytype, comparison: Comparison) !void {
         if (i > 0) try writer.writeAll(", ");
         try writer.writeAll(stat.construct);
     }
+    try writer.writeByte('\n');
+    try writer.writeAll(raw_syntax_note);
     try writer.writeByte('\n');
 
     if (comparison.statistics.len == 0) {
@@ -144,6 +148,8 @@ fn renderComparisonTerminal(writer: anytype, comparison: Comparison) !void {
 fn renderTopicTerminal(writer: anytype, report: TopicReport) !void {
     try writer.print("{s}\n", .{report.title});
     for (0..report.title.len) |_| try writer.writeByte('=');
+    try writer.writeByte('\n');
+    try writer.writeAll(raw_syntax_note);
     try writer.writeByte('\n');
 
     if (report.statistics.len == 0) {
@@ -221,7 +227,9 @@ fn renderComparisonJson(allocator: std.mem.Allocator, writer: anytype, compariso
     try renderFilterJson(w, comparison.filter);
     try w.writeAll(",\"incomplete\":");
     try w.print("{s}", .{if (comparison.incomplete) "true" else "false"});
-    try w.writeAll(",\"statistics\":[");
+    try w.writeAll(",\"note\":\"");
+    try writeJsonString(w, raw_syntax_note);
+    try w.writeAll("\",\"statistics\":[");
     for (comparison.statistics, 0..) |stat, i| {
         if (i > 0) try w.writeByte(',');
         try renderStatisticJson(w, stat);
@@ -242,7 +250,9 @@ fn renderTopicJson(allocator: std.mem.Allocator, writer: anytype, report: TopicR
     try renderFilterJson(w, report.filter);
     try w.writeAll(",\"incomplete\":");
     try w.print("{s}", .{if (report.incomplete) "true" else "false"});
-    try w.writeAll(",\"statistics\":[");
+    try w.writeAll(",\"note\":\"");
+    try writeJsonString(w, raw_syntax_note);
+    try w.writeAll("\",\"statistics\":[");
     for (report.statistics, 0..) |stat, i| {
         if (i > 0) try w.writeByte(',');
         try renderStatisticJson(w, stat);
@@ -403,4 +413,124 @@ test "percentage is calculated against shared denominator" {
         try std.testing.expectEqual(@as(i64, 1), stat.count);
         try std.testing.expectApproxEqAbs(@as(f64, 33.333333), stat.percentage.?, 0.0001);
     }
+}
+
+test "golden comparison terminal output covers empty dataset" {
+    var db = try storage.Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+
+    var comparison = try compare(std.testing.allocator, &db, &.{"each"}, .{});
+    defer comparison.deinit(std.testing.allocator);
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try renderComparisonTerminal(&output.writer, comparison);
+
+    const expected = "Comparing: each\n" ++
+        raw_syntax_note ++ "\n" ++
+        "Snapshot:    none\n" ++
+        "Versions:    rgp=unknown prism=unknown classifier=unknown taxonomy=unknown\n" ++
+        "Filter:      none\n" ++
+        "Denominator: 0 observation(s)\n" ++
+        "No completed observations match the current filters.\n";
+    try std.testing.expectEqualStrings(expected, output.written());
+}
+
+test "golden comparison terminal output covers filtered dataset" {
+    var db = try storage.Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+    const repo = try db.addRepository("project-f");
+    const commit = try db.addCommit(repo, "sha-f");
+    const prod = try db.addFileClassified(commit, "lib/a.rb", "hash", "production");
+    const test_file = try db.addFileClassified(commit, "test/a_test.rb", "hash2", "test");
+    const each = try db.addConstruct("each");
+    _ = try db.persistCompleted(.{ .repository_id = repo, .commit_id = commit, .rgp_version = "r", .prism_version = "p", .classifier_version = "c", .taxonomy_version = "t" }, &.{
+        .{ .repository_id = repo, .commit_id = commit, .file_id = prod, .start_offset = 0, .end_offset = 4, .line = 1, .column = 1, .node_kind = "PM_CALL_NODE", .raw_json = "{}", .construct_id = each },
+        .{ .repository_id = repo, .commit_id = commit, .file_id = test_file, .start_offset = 0, .end_offset = 4, .line = 1, .column = 1, .node_kind = "PM_CALL_NODE", .raw_json = "{}", .construct_id = each },
+    });
+
+    var comparison = try compare(std.testing.allocator, &db, &.{"each"}, .{ .classification = "production" });
+    defer comparison.deinit(std.testing.allocator);
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try renderComparisonTerminal(&output.writer, comparison);
+
+    const expected = "Comparing: each\n" ++
+        raw_syntax_note ++ "\n" ++
+        "Snapshot:    none\n" ++
+        "Versions:    rgp=r prism=p classifier=c taxonomy=t\n" ++
+        "Filter:      classification=production\n" ++
+        "Denominator: 1 observation(s)\n" ++
+        "\n" ++
+        "construct    count    percent    projects\n" ++
+        "-------------------------------------------\n" ++
+        "each         1        100.0%     1\n";
+    try std.testing.expectEqualStrings(expected, output.written());
+}
+
+test "golden report terminal output covers empty dataset" {
+    var db = try storage.Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+
+    var report = try reportTopic(std.testing.allocator, &db, "conditionals", .{});
+    defer report.deinit(std.testing.allocator);
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try renderTopicTerminal(&output.writer, report);
+
+    const expected = "Conditionals\n" ++
+        "============\n" ++
+        raw_syntax_note ++ "\n" ++
+        "Snapshot:    none\n" ++
+        "Versions:    rgp=unknown prism=unknown classifier=unknown taxonomy=unknown\n" ++
+        "Filter:      none\n" ++
+        "Denominator: 0 observation(s)\n" ++
+        "No completed observations match the current filters.\n";
+    try std.testing.expectEqualStrings(expected, output.written());
+}
+
+test "golden comparison json output covers empty dataset" {
+    var db = try storage.Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+
+    var comparison = try compare(std.testing.allocator, &db, &.{"each"}, .{});
+    defer comparison.deinit(std.testing.allocator);
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try renderComparisonJson(std.testing.allocator, &output.writer, comparison);
+
+    const expected =
+        "{\"filter\":{},\"incomplete\":false,\"note\":\"" ++ raw_syntax_note ++
+        "\",\"statistics\":[{\"construct\":\"each\",\"snapshot_id\":null," ++
+        "\"rgp_version\":\"unknown\",\"prism_version\":\"unknown\"," ++
+        "\"classifier_version\":\"unknown\",\"taxonomy_version\":\"unknown\"," ++
+        "\"denominator\":0,\"count\":0,\"percentage\":null,\"projects\":[]}]}\n";
+    try std.testing.expectEqualStrings(expected, output.written());
+}
+
+test "golden report json output covers empty dataset" {
+    var db = try storage.Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+
+    var report = try reportTopic(std.testing.allocator, &db, "conditionals", .{});
+    defer report.deinit(std.testing.allocator);
+
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    try renderTopicJson(std.testing.allocator, &output.writer, report);
+
+    const expected =
+        "{\"topic\":\"conditionals\",\"title\":\"Conditionals\",\"filter\":{}," ++
+        "\"incomplete\":false,\"note\":\"" ++ raw_syntax_note ++
+        "\",\"statistics\":[" ++
+        "{\"construct\":\"if\",\"snapshot_id\":null,\"rgp_version\":\"unknown\",\"prism_version\":\"unknown\"," ++
+        "\"classifier_version\":\"unknown\",\"taxonomy_version\":\"unknown\",\"denominator\":0,\"count\":0,\"percentage\":null,\"projects\":[]}," ++
+        "{\"construct\":\"unless\",\"snapshot_id\":null,\"rgp_version\":\"unknown\",\"prism_version\":\"unknown\"," ++
+        "\"classifier_version\":\"unknown\",\"taxonomy_version\":\"unknown\",\"denominator\":0,\"count\":0,\"percentage\":null,\"projects\":[]}," ++
+        "{\"construct\":\"case\",\"snapshot_id\":null,\"rgp_version\":\"unknown\",\"prism_version\":\"unknown\"," ++
+        "\"classifier_version\":\"unknown\",\"taxonomy_version\":\"unknown\",\"denominator\":0,\"count\":0,\"percentage\":null,\"projects\":[]}]}\n";
+    try std.testing.expectEqualStrings(expected, output.written());
 }

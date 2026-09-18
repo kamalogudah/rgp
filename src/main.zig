@@ -71,3 +71,88 @@ fn run(args: []const []const u8, writer: *Io.Writer, io: Io, allocator: std.mem.
     }
     return 0;
 }
+
+test "section 35 commands run end to end" {
+    const allocator = std.testing.allocator;
+
+    const cwd_path = try std.process.currentPathAlloc(std.testing.io, allocator);
+    defer allocator.free(cwd_path);
+    const exe = try std.fs.path.resolve(allocator, &.{ cwd_path, "zig-out/bin/rgp" });
+    defer allocator.free(exe);
+
+    var tmp = std.testing.tmpDir(.{ .iterate = false });
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "sample.rb",
+        .data = "items.each { |i| i }\n" ++
+            "for i in items\n" ++
+            "end\n" ++
+            "3.times { }\n" ++
+            "while false\n" ++
+            "end\n" ++
+            "items.size\n" ++
+            "items.count\n" ++
+            "items.length\n" ++
+            "items.map { |i| i }\n" ++
+            "items.collect { |i| i }\n" ++
+            "items.select { |i| i }\n" ++
+            "items.filter { |i| i }\n" ++
+            "items.reject { |i| i }\n" ++
+            "items.reduce(0) { |s, i| s + i }\n" ++
+            "items.inject(0) { |s, i| s + i }\n" ++
+            "if true\n" ++
+            "end\n" ++
+            "unless false\n" ++
+            "end\n" ++
+            "case items\n" ++
+            "when nil\n" ++
+            "end\n" ++
+            "begin\n" ++
+            "rescue StandardError\n" ++
+            "end\n",
+    });
+
+    const analyze = try runCommand(allocator, exe, tmp.dir, &.{ "analyze", "." });
+    defer allocator.free(analyze.stdout);
+    defer allocator.free(analyze.stderr);
+    try std.testing.expect(std.mem.indexOf(u8, analyze.stdout, "analyzed") != null);
+
+    const commands = [_][]const []const u8{
+        &.{ "compare", "each", "for" },
+        &.{ "compare", "times", "while" },
+        &.{ "compare", "size", "count", "length" },
+        &.{ "compare", "map", "collect" },
+        &.{ "compare", "select", "filter", "reject" },
+        &.{ "compare", "reduce", "inject" },
+        &.{ "compare", "if", "unless" },
+        &.{ "compare", "case", "if" },
+        &.{ "compare", "block" },
+        &.{ "report", "conditionals" },
+        &.{ "report", "collections" },
+    };
+
+    for (commands) |args| {
+        const result = try runCommand(allocator, exe, tmp.dir, args);
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+        try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, result.term);
+        try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Denominator:") != null);
+        try std.testing.expect(std.mem.indexOf(u8, result.stdout, rgp.reports.raw_syntax_note) != null);
+    }
+}
+
+fn runCommand(allocator: std.mem.Allocator, exe: []const u8, dir: std.Io.Dir, args: []const []const u8) !std.process.RunResult {
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, exe);
+    try argv.appendSlice(allocator, args);
+
+    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_len = try dir.realPath(std.testing.io, &path_buffer);
+
+    return try std.process.run(allocator, std.testing.io, .{
+        .argv = argv.items,
+        .cwd = .{ .path = path_buffer[0..cwd_len] },
+    });
+}

@@ -172,6 +172,10 @@ pub fn build(b: *std.Build) void {
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
+    // End-to-end tests in main.zig invoke the installed CLI binary, so build it
+    // before running the executable's tests.
+    run_exe_tests.step.dependOn(b.getInstallStep());
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
