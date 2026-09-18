@@ -118,7 +118,7 @@ fn gitSha(io: Io, allocator: std.mem.Allocator, root: Io.Dir) !?[]u8 {
     const head = (try readOptional(io, allocator, root, ".git/HEAD")) orelse return null;
     defer allocator.free(head);
     const value = std.mem.trim(u8, head, " \t\r\n");
-    if (sha(value)) return allocator.dupe(u8, value);
+    if (sha(value)) return try allocator.dupe(u8, value);
     const prefix = "ref: ";
     if (!std.mem.startsWith(u8, value, prefix)) return null;
     const ref = value[prefix.len..];
@@ -128,7 +128,7 @@ fn gitSha(io: Io, allocator: std.mem.Allocator, root: Io.Dir) !?[]u8 {
     if (try readOptional(io, allocator, root, ref_path)) |contents| {
         defer allocator.free(contents);
         const ref_value = std.mem.trim(u8, contents, " \t\r\n");
-        if (sha(ref_value)) return allocator.dupe(u8, ref_value);
+        if (sha(ref_value)) return try allocator.dupe(u8, ref_value);
     }
     // Repositories commonly pack refs after maintenance; resolving this local
     // file keeps SHA capture offline and independent of the Git executable.
@@ -139,7 +139,7 @@ fn gitSha(io: Io, allocator: std.mem.Allocator, root: Io.Dir) !?[]u8 {
         var fields = std.mem.splitScalar(u8, line, ' ');
         const candidate = fields.next() orelse continue;
         const candidate_ref = fields.next() orelse continue;
-        if (std.mem.eql(u8, candidate_ref, ref) and sha(candidate)) return allocator.dupe(u8, candidate);
+        if (std.mem.eql(u8, candidate_ref, ref) and sha(candidate)) return try allocator.dupe(u8, candidate);
     }
     return null;
 }
@@ -152,7 +152,7 @@ fn rubyVersion(io: Io, allocator: std.mem.Allocator, root: Io.Dir) !?[]u8 {
     const contents = (try readOptional(io, allocator, root, ".ruby-version")) orelse return null;
     defer allocator.free(contents);
     const version = std.mem.trim(u8, contents, " \t\r\n");
-    return if (looksRubyVersion(version)) allocator.dupe(u8, version) else null;
+    return if (looksRubyVersion(version)) try allocator.dupe(u8, version) else null;
 }
 fn looksRubyVersion(version: []const u8) bool {
     if (version.len < 3 or version[0] < '0' or version[0] > '9') return false;
@@ -165,12 +165,23 @@ fn looksRubyVersion(version: []const u8) bool {
     return dots >= 1;
 }
 fn framework(io: Io, allocator: std.mem.Allocator, root: Io.Dir) !?Framework {
-    const gemfile = (try readOptional(io, allocator, root, "Gemfile")) orelse return null;
+    const gemfile = (try readOptional(io, allocator, root, "Gemfile")) orelse return rake(io, allocator, root);
     defer allocator.free(gemfile);
     if (std.mem.indexOf(u8, gemfile, "gem 'rails'") != null or std.mem.indexOf(u8, gemfile, "gem \"rails\"") != null) return .rails;
     if (std.mem.indexOf(u8, gemfile, "gem 'hanami'") != null or std.mem.indexOf(u8, gemfile, "gem \"hanami\"") != null) return .hanami;
     if (std.mem.indexOf(u8, gemfile, "gem 'sinatra'") != null or std.mem.indexOf(u8, gemfile, "gem \"sinatra\"") != null) return .sinatra;
     if (std.mem.indexOf(u8, gemfile, "gem 'rspec'") != null or std.mem.indexOf(u8, gemfile, "gem \"rspec\"") != null) return .rspec;
+    return rake(io, allocator, root);
+}
+fn rake(io: Io, allocator: std.mem.Allocator, root: Io.Dir) !?Framework {
+    if (try readOptional(io, allocator, root, "Rakefile")) |contents| {
+        allocator.free(contents);
+        return .rake;
+    }
+    if (try readOptional(io, allocator, root, "rakefile")) |contents| {
+        allocator.free(contents);
+        return .rake;
+    }
     return null;
 }
 
@@ -193,7 +204,7 @@ test "discovery excludes configured paths and symlinks but retains malformed Rub
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "lib/good.rb", .data = "puts :ok\n" });
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "lib/broken.rb", .data = "def missing(\n" });
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "ignored/nope.rb", .data = "puts :nope\n" });
-    try std.posix.symlink("lib/good.rb", tmp.dir.handle, "linked.rb");
+    try tmp.dir.symLink(std.testing.io, "lib/good.rb", "linked.rb", .{});
     var result = try discoverDir(std.testing.io, std.testing.allocator, tmp.dir, .{ .exclude = &.{"ignored/**"} });
     defer result.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 2), result.files.len);
@@ -223,4 +234,21 @@ test "metadata captures local provenance and retains unknown facts" {
     var invalid = try discoverDir(std.testing.io, std.testing.allocator, bare.dir, .{});
     defer invalid.deinit(std.testing.allocator);
     try std.testing.expect(invalid.metadata.ruby_version == null);
+}
+
+test "rake is inferred from a Rakefile unless a stronger framework is present" {
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Rakefile", .data = "task :default => :test\n" });
+    var result = try discoverDir(std.testing.io, std.testing.allocator, tmp.dir, .{});
+    defer result.deinit(std.testing.allocator);
+    try std.testing.expectEqual(Framework.rake, result.metadata.framework.?);
+
+    var gemfile = std.testing.tmpDir(.{ .iterate = true });
+    defer gemfile.cleanup();
+    try gemfile.dir.writeFile(std.testing.io, .{ .sub_path = "Gemfile", .data = "gem 'rails'\n" });
+    try gemfile.dir.writeFile(std.testing.io, .{ .sub_path = "Rakefile", .data = "task :default => :test\n" });
+    var rails = try discoverDir(std.testing.io, std.testing.allocator, gemfile.dir, .{});
+    defer rails.deinit(std.testing.allocator);
+    try std.testing.expectEqual(Framework.rails, rails.metadata.framework.?);
 }
