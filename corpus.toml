@@ -2,13 +2,143 @@
 schema_version = 1
 
 [corpus]
-# This offline fixture demonstrates the contract; replace it with a real pinned corpus.
-# Source data remains reproducible from immutable revisions.
+# The checked-in corpus is offline-first: `rgp corpus sync` materializes
+# pinned snapshots, and `rgp analyze` works without network access once they
+# are present. Revisions are immutable 40-character Git commit SHAs.
 offline = true
 
 [[repository]]
 id = "rgp-fixture"
 source = "."
-revision = "e8cbd95f6fe039a95d8e7a1c86ea4c14a96bbe65"
+revision = "b1ccbd8dbe5de5bff33471a47e3ca34d0ee3e98c"
+category = "fixture"
 include = ["fixtures/**/*.rb"]
 exclude = ["vendor/**", "tmp/**"]
+
+[[repository]]
+id = "rails_rails"
+source = "https://github.com/rails/rails"
+revision = "6848556f777416f10279b7d6ceb371d56058214a"
+category = "rails"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "rack_rack"
+source = "https://github.com/rack/rack"
+revision = "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5"
+category = "framework"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "sidekiq_sidekiq"
+source = "https://github.com/sidekiq/sidekiq"
+revision = "e8c3fe311cf93f56e504c369c40df9db4436b6e5"
+category = "library"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "rubocop_rubocop"
+source = "https://github.com/rubocop/rubocop"
+revision = "5bb056735d844c7b0f4a5adb057926bfc6e0b635"
+category = "tool"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "rspec_rspec-core"
+source = "https://github.com/rspec/rspec-core"
+revision = "aec5f49485d97908183dbe790a7fefb8baaa8091"
+category = "tool"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "heartcombo_devise"
+source = "https://github.com/heartcombo/devise"
+revision = "372b295fe6f63b4af3269f5dcd51a18c0bc2016c"
+category = "rails"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "puma_puma"
+source = "https://github.com/puma/puma"
+revision = "306daddfd07fdf0ca902eb7ea89ceb7dd6139050"
+category = "server"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "sinatra_sinatra"
+source = "https://github.com/sinatra/sinatra"
+revision = "cb22afd7902b566b6eaba6c4ea89739494a65d12"
+category = "framework"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "hanami_hanami"
+source = "https://github.com/hanami/hanami"
+revision = "c31f9cf8e51e5c6c5231f45fcaea625202c30ebd"
+category = "framework"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "dry-rb_dry-core"
+source = "https://github.com/dry-rb/dry-core"
+revision = "02fde38854a0413d704c32d5aa4b67466183eef2"
+category = "library"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "hotwired_turbo-rails"
+source = "https://github.com/hotwired/turbo-rails"
+revision = "37530c08780fa6f6dbb56a633de4b81169bdd174"
+category = "rails"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "ruby_rake"
+source = "https://github.com/ruby/rake"
+revision = "8b4e8eb0da4bed60e3721167766a5c46ce7df32c"
+category = "standard"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "ruby_debug"
+source = "https://github.com/ruby/debug"
+revision = "6510cfbc7496c55ebbefa437a25c17ca58f7c5eb"
+category = "standard"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "ruby_irb"
+source = "https://github.com/ruby/irb"
+revision = "a0f3ec30f35022e8e3d2364f52f2609e558b63e7"
+category = "standard"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "faker-ruby_faker"
+source = "https://github.com/faker-ruby/faker"
+revision = "c8a881b9f00fd7b591dcfa5506a0179e6fd52036"
+category = "library"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]
+
+[[repository]]
+id = "spree_spree"
+source = "https://github.com/spree/spree"
+revision = "031be6fe12fb3cd3013d7ac6bb945dc44ec104ea"
+category = "rails"
+include = ["**/*.rb"]
+exclude = ["vendor/**", "tmp/**", "node_modules/**"]

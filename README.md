@@ -58,9 +58,23 @@ rgp --help
 rgp --version
 ```
 
+### Corpus management
+
+```text
+rgp corpus add <source> [--revision <sha>] [--category <cat>] [--id <id>]
+rgp corpus remove <repo>
+rgp corpus list
+rgp corpus sync
+```
+
+`corpus.toml` pins every repository to an exact 40-character Git commit and a
+category such as `rails`, `framework`, `library`, `tool`, or `standard`.
+`rgp corpus sync` materializes remote snapshots with shallow Git fetches and
+verifies the working tree matches the pinned revision. Removing an entry leaves
+its cached snapshot in place by default.
+
 Unknown commands exit with status 2 and explain how to view the available
-commands. The first functional commands are introduced as their roadmap work
-lands.
+commands.
 
 ## Architecture
 

@@ -35,15 +35,24 @@ Each `[[repository]]` requires:
 - `include`: non-empty list of repository-relative glob patterns.
 - `exclude`: list of repository-relative glob patterns; it may be empty.
 
-`[corpus].offline` is required and must be `true` for the checked-in reference
-corpus. It means analysis consumes already materialized snapshots only. A
-future explicit sync command may fetch `source`, but must verify that the
-result resolves to `revision` before saving it.
+Each `[[repository]]` may also set:
 
-The analyzer records `id`, `source`, `revision`, the configuration schema
-version, and the analyzer version with every observation and aggregate. This
-is the minimum provenance needed to reproduce a statistic offline from a
-saved snapshot.
+- `category`: one of `rails`, `framework`, `library`, `tool`, `standard`,
+  `server`, `fixture`, or `other`. Categories are retained with pinned
+  snapshots so reports can compare Rails and non-Rails cohorts rather than
+  treating the corpus as a single bucket.
+
+`[corpus].offline` is required and must be `true` for the checked-in reference
+corpus. It means analysis consumes already materialized snapshots only. The
+explicit `rgp corpus sync` command may fetch a remote `source`, but it always
+verifies that the working tree resolves to the pinned `revision` before
+reporting success.
+
+The analyzer records `id`, `source`, `revision`, `category`, the configuration
+schema version, and the analyzer version with every observation and aggregate.
+This is the minimum provenance needed to reproduce a statistic offline from a
+saved snapshot. The analyzer only reads Ruby source files; it never executes
+repository code.
 
 Examples of required diagnostics:
 
@@ -51,7 +60,7 @@ Examples of required diagnostics:
 error: corpus.toml: schema_version 2 is unsupported (supported: 1)
 error: corpus.toml: repository `rack`: revision must be a 40-character lowercase Git commit SHA
 error: corpus.toml: duplicate repository id `rgp-fixture`
-error: corpus.toml: `rgp analyze --corpus` requires an initialized local snapshot for `rgp-fixture` at e8cbd95f6fe039a95d8e7a1c86ea4c14a96bbe65; run `rgp corpus sync` explicitly
+error: corpus.toml: `rgp analyze --corpus` requires an initialized local snapshot for `rgp-fixture` at b1ccbd8dbe5de5bff33471a47e3ca34d0ee3e98c; run `rgp corpus sync` explicitly
 ```
 
 ## `taxonomy.toml`
@@ -95,6 +104,30 @@ error: idioms.toml: idiom `manual_collection_transformation`: topic `collections
 error: idioms.toml: idiom `map`: comparison_idiom cannot reference itself
 error: idioms.toml: duplicate idiom id `map`
 ```
+
+## Corpus management commands
+
+```text
+rgp corpus add <source> [--revision <sha>] [--category <cat>] [--id <id>]
+rgp corpus remove <repo>
+rgp corpus list
+rgp corpus sync
+```
+
+- `add` appends a repository to `corpus.toml`. For HTTPS/Git URLs it resolves
+  the default branch HEAD to a 40-character SHA unless `--revision` is given.
+  For local paths it reads the current Git HEAD unless `--revision` is given.
+- `remove` deletes the matching entry from `corpus.toml` but deliberately
+  leaves any materialized snapshot directory in the cache root (default
+  `.rgp/corpus/<id>`). This preserves reproducible history and avoids
+  accidental data loss; delete cached snapshots manually or with a future
+  `rgp corpus clean` command.
+- `list` prints every configured repository, its pinned revision, category,
+  and whether its snapshot is present.
+- `sync` verifies local paths and materializes remote snapshots at the pinned
+  revision using shallow Git fetches. It reports per-repository status with
+  actionable failure messages and exits non-zero if any snapshot cannot be
+  initialized.
 
 ## Validation evidence
 

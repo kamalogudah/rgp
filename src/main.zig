@@ -12,9 +12,10 @@ const usage =
     "Commands:\n" ++
     "  help, --help, -h       Show this help\n" ++
     "  --version, -V          Show the RGP version\n" ++
+    "  corpus                 Manage the analyzed corpus\n" ++
+    "  parse <file>           Parse a Ruby file and emit JSON\n" ++
     "\n" ++
-    "Analysis, corpus, reporting, learning, and practice commands will be\n" ++
-    "introduced through the roadmap. Run `rgp --help` to see available commands.\n";
+    "Run `rgp corpus` for corpus-management usage.\n";
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -48,6 +49,9 @@ fn run(args: []const []const u8, writer: *Io.Writer, io: Io, allocator: std.mem.
         defer document.deinit();
         try rgp.traversal.writeJson(&document, writer);
         return 0;
+    }
+    if (args.len > 0 and std.mem.eql(u8, args[0], "corpus")) {
+        return rgp.cli.corpus.run(io, allocator, args[1..], writer);
     }
     switch (try rgp.parseCommand(args)) {
         .help => try writer.writeAll(usage),

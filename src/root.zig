@@ -14,6 +14,10 @@ pub const prism = @import("prism/parser.zig");
 /// Versioned, provenance-preserving SQLite persistence for analyzer facts.
 pub const storage = @import("storage/sqlite.zig");
 pub const repository = @import("repository/discovery.zig");
+/// Corpus manifest and snapshot materialization.
+pub const corpus = @import("corpus/root.zig");
+/// CLI command adapters.
+pub const cli = @import("cli/root.zig");
 
 // Force analysis of the repository discovery module so its declarations and
 // tests are compiled and exercised by the deterministic test build.
