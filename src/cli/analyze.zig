@@ -271,5 +271,5 @@ test "parseArgs returns help for --help" {
 
 test "parseArgs rejects unknown options and multiple positionals" {
     try std.testing.expectError(error.UnknownOption, parseArgs(&.{"--fast"}));
-    try std.testing.expectError(error.TooManyArguments, parseArgs(&.{"a", "b"}));
+    try std.testing.expectError(error.TooManyArguments, parseArgs(&.{ "a", "b" }));
 }
