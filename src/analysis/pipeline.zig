@@ -152,7 +152,7 @@ pub fn analyze(allocator: std.mem.Allocator, io: Io, db: *storage.Database, targ
         const hash = try sourceHash(allocator, source);
         defer allocator.free(hash);
 
-        const file_record = try db.upsertFile(commit_id, file.path, hash);
+        const file_record = try db.upsertFileClassified(commit_id, file.path, hash, @tagName(file.classification));
         try current_file_ids.append(allocator, file_record.id);
 
         const cached = !file_record.changed and try db.fileIsCached(file_record.id, run_value);
@@ -181,6 +181,8 @@ pub fn analyze(allocator: std.mem.Allocator, io: Io, db: *storage.Database, targ
         return result;
     };
 
+    if (filesFailedBeforePersist(file_results.items)) try db.finishRun(run_id, .failed, "one or more files failed");
+
     var files_analyzed: usize = 0;
     var files_skipped: usize = 0;
     var files_failed: usize = 0;
@@ -207,6 +209,11 @@ pub fn analyze(allocator: std.mem.Allocator, io: Io, db: *storage.Database, targ
         .failure = failure_message,
         .file_results = try file_results.toOwnedSlice(allocator),
     };
+}
+
+fn filesFailedBeforePersist(results: []const FileResult) bool {
+    for (results) |result| if (result.status == .failed) return true;
+    return false;
 }
 
 fn analyzeFile(allocator: std.mem.Allocator, db: *storage.Database, source: []const u8, path: []const u8, repository_id: i64, commit_id: i64, file_id: i64, observations: *std.ArrayList(storage.Observation)) Error!FileResult {

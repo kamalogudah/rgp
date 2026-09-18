@@ -20,7 +20,7 @@ const ok = 0;
 const row = 100;
 const done = 101;
 const transient: ?*const anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
-pub const latest_schema_version = 2;
+pub const latest_schema_version = 3;
 
 pub const Run = struct {
     repository_id: i64,
@@ -46,6 +46,64 @@ pub const Observation = struct {
     name: ?[]const u8 = null,
     receiver_kind: ?[]const u8 = null,
     block_syntax: ?[]const u8 = null,
+};
+
+pub const StatisticsQuery = struct {
+    snapshot_id: ?i64 = null,
+    repository_id: ?i64 = null,
+    repository_origin: ?[]const u8 = null,
+    classification: ?[]const u8 = null,
+    receiver_kind: ?[]const u8 = null,
+    rgp_version: ?[]const u8 = null,
+    prism_version: ?[]const u8 = null,
+    classifier_version: ?[]const u8 = null,
+    taxonomy_version: ?[]const u8 = null,
+};
+
+pub const SourceObservation = struct {
+    id: i64,
+    repository_id: i64,
+    repository_origin: []u8,
+    commit_sha: []u8,
+    file_path: []u8,
+    classification: []u8,
+    line: i64,
+    column: i64,
+    raw_json: []u8,
+    pub fn deinit(self: *SourceObservation, allocator: std.mem.Allocator) void {
+        allocator.free(self.repository_origin);
+        allocator.free(self.commit_sha);
+        allocator.free(self.file_path);
+        allocator.free(self.classification);
+        allocator.free(self.raw_json);
+    }
+};
+
+pub const ProjectCount = struct { repository_id: i64, origin: []u8, count: i64 };
+
+pub const Statistic = struct {
+    construct: []u8,
+    snapshot_id: ?i64,
+    rgp_version: []u8,
+    prism_version: []u8,
+    classifier_version: []u8,
+    taxonomy_version: []u8,
+    denominator: i64,
+    count: i64,
+    percentage: ?f64,
+    projects: []ProjectCount,
+    supporting_observations: []SourceObservation,
+    pub fn deinit(self: *Statistic, allocator: std.mem.Allocator) void {
+        allocator.free(self.construct);
+        allocator.free(self.rgp_version);
+        allocator.free(self.prism_version);
+        allocator.free(self.classifier_version);
+        allocator.free(self.taxonomy_version);
+        for (self.projects) |project| allocator.free(project.origin);
+        allocator.free(self.projects);
+        for (self.supporting_observations) |*source| source.deinit(allocator);
+        allocator.free(self.supporting_observations);
+    }
 };
 
 pub const Database = struct {
@@ -75,6 +133,7 @@ pub const Database = struct {
         if (current > latest_schema_version) return error.MigrationTooNew;
         if (current < 1) try self.exec("BEGIN IMMEDIATE;" ++ migration_1 ++ "INSERT INTO schema_migrations VALUES(1);COMMIT;");
         if (current < 2) try self.exec("BEGIN IMMEDIATE;" ++ migration_2 ++ "INSERT INTO schema_migrations VALUES(2);COMMIT;");
+        if (current < 3) try self.exec("BEGIN IMMEDIATE;" ++ migration_3 ++ "INSERT INTO schema_migrations VALUES(3);COMMIT;");
     }
     pub fn schemaVersion(self: *Database) !i64 {
         return self.one("SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", .{});
@@ -95,7 +154,10 @@ pub const Database = struct {
         return self.addCommit(repo, sha);
     }
     pub fn addFile(self: *Database, commit: i64, path: []const u8, hash: []const u8) !i64 {
-        return self.insert("INSERT INTO files(commit_id,path,source_sha256) VALUES(?1,?2,?3);", .{ commit, path, hash });
+        return self.addFileClassified(commit, path, hash, "production");
+    }
+    pub fn addFileClassified(self: *Database, commit: i64, path: []const u8, hash: []const u8, classification: []const u8) !i64 {
+        return self.insert("INSERT INTO files(commit_id,path,source_sha256,classification) VALUES(?1,?2,?3,?4);", .{ commit, path, hash, classification });
     }
 
     pub const FileRecord = struct { id: i64, hash: []const u8, changed: bool };
@@ -104,14 +166,20 @@ pub const Database = struct {
     /// updates the stored hash and returns the same id so callers can detect
     /// changed files and invalidate stale observations.
     pub fn upsertFile(self: *Database, commit: i64, path: []const u8, hash: []const u8) !FileRecord {
+        return self.upsertFileClassified(commit, path, hash, "production");
+    }
+    pub fn upsertFileClassified(self: *Database, commit: i64, path: []const u8, hash: []const u8, classification: []const u8) !FileRecord {
         if (try self.oneOrNull("SELECT id, source_sha256 FROM files WHERE commit_id=?1 AND path=?2;", .{ commit, path })) |id| {
             const stored_hash = try self.string("SELECT source_sha256 FROM files WHERE id=?1;", .{id});
             defer self.allocator.free(stored_hash);
-            if (std.mem.eql(u8, stored_hash, hash)) return .{ .id = id, .hash = stored_hash, .changed = false };
-            try self.execute("UPDATE files SET source_sha256=?1 WHERE id=?2;", .{ hash, id });
+            const old_classification = try self.string("SELECT classification FROM files WHERE id=?1;", .{id});
+            defer self.allocator.free(old_classification);
+            const changed = !std.mem.eql(u8, stored_hash, hash) or !std.mem.eql(u8, old_classification, classification);
+            if (!changed) return .{ .id = id, .hash = stored_hash, .changed = false };
+            try self.execute("UPDATE files SET source_sha256=?1,classification=?2 WHERE id=?3;", .{ hash, classification, id });
             return .{ .id = id, .hash = hash, .changed = true };
         }
-        const id = try self.addFile(commit, path, hash);
+        const id = try self.addFileClassified(commit, path, hash, classification);
         return .{ .id = id, .hash = hash, .changed = true };
     }
 
@@ -187,7 +255,9 @@ pub const Database = struct {
 
     fn fileIdsForCommit(self: *Database, commit_id: i64) ![]i64 {
         const sql = "SELECT id FROM files WHERE commit_id=?1;";
-        const statement = try self.prepare(sql);
+        const zsql = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(zsql);
+        const statement = try self.prepare(zsql);
         defer _ = sqlite3_finalize(statement);
         try bindAll(statement, .{commit_id});
         var list = std.ArrayList(i64).empty;
@@ -245,6 +315,69 @@ pub const Database = struct {
         try self.execute("UPDATE analysis_runs SET status='failed',failure=?1,finished_at=unixepoch() WHERE commit_id=?2 AND status='running';", .{ message, commit_id });
     }
 
+    pub fn queryStatistics(self: *Database, allocator: std.mem.Allocator, constructs: []const []const u8, q: StatisticsQuery) ![]Statistic {
+        var result = std.ArrayList(Statistic).empty;
+        errdefer {
+            for (result.items) |*item| item.deinit(allocator);
+            result.deinit(allocator);
+        }
+        for (constructs) |construct| {
+            const common = .{ q.snapshot_id, q.repository_id, q.repository_origin, q.classification, q.receiver_kind, q.rgp_version, q.prism_version, q.classifier_version, q.taxonomy_version };
+            const args = .{ q.snapshot_id, q.repository_id, q.repository_origin, q.classification, q.receiver_kind, q.rgp_version, q.prism_version, q.classifier_version, q.taxonomy_version, construct };
+            const where = " FROM observations o JOIN analysis_runs r ON r.id=o.analysis_run_id JOIN files f ON f.id=o.file_id JOIN repositories p ON p.id=o.repository_id JOIN commits cm ON cm.id=o.commit_id JOIN constructs c ON c.id=o.construct_id WHERE r.status=\"completed\" AND (?1 IS NULL OR r.snapshot_id=?1) AND (?2 IS NULL OR o.repository_id=?2) AND (?3 IS NULL OR p.origin=?3) AND (?4 IS NULL OR f.classification=?4) AND (?5 IS NULL OR o.receiver_kind=?5) AND (?6 IS NULL OR r.rgp_version=?6) AND (?7 IS NULL OR r.prism_version=?7) AND (?8 IS NULL OR r.classifier_version=?8) AND (?9 IS NULL OR r.taxonomy_version=?9)";
+            const denominator = try self.one("SELECT COUNT(*)" ++ where, common);
+            const matches = try self.one("SELECT COUNT(*)" ++ where ++ " AND c.name=?10", args);
+            const version = try self.string("SELECT COALESCE(MIN(r.rgp_version), char(117,110,107,110,111,119,110))" ++ where, common);
+            const prism_version = try self.string("SELECT COALESCE(MIN(r.prism_version), char(117,110,107,110,111,119,110))" ++ where, common);
+            const classifier_version = try self.string("SELECT COALESCE(MIN(r.classifier_version), char(117,110,107,110,111,119,110))" ++ where, common);
+            const taxonomy_version = try self.string("SELECT COALESCE(MIN(r.taxonomy_version), char(117,110,107,110,111,119,110))" ++ where, common);
+            const projects = try self.projectCounts(allocator, "SELECT o.repository_id,p.origin,COUNT(*)" ++ where ++ " AND c.name=?10 GROUP BY o.repository_id,p.origin ORDER BY o.repository_id", args);
+            const supporting = try self.sourceObservations(allocator, "SELECT o.id,o.repository_id,p.origin,coalesce(cm.sha, char(117,110,107,110,111,119,110)),f.path,f.classification,o.line,o.column,o.raw_json" ++ where ++ " AND c.name=?10 ORDER BY o.id", args);
+            try result.append(allocator, .{ .construct = try allocator.dupe(u8, construct), .snapshot_id = q.snapshot_id, .rgp_version = version, .prism_version = prism_version, .classifier_version = classifier_version, .taxonomy_version = taxonomy_version, .denominator = denominator, .count = matches, .percentage = if (denominator == 0) null else @as(f64, @floatFromInt(matches)) * 100.0 / @as(f64, @floatFromInt(denominator)), .projects = projects, .supporting_observations = supporting });
+        }
+        return try result.toOwnedSlice(allocator);
+    }
+
+    fn projectCounts(self: *Database, allocator: std.mem.Allocator, sql: []const u8, values: anytype) ![]ProjectCount {
+        const zsql = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(zsql);
+        const statement = try self.prepare(zsql);
+        defer _ = sqlite3_finalize(statement);
+        try bindAll(statement, values);
+        var list = std.ArrayList(ProjectCount).empty;
+        errdefer {
+            for (list.items) |item| allocator.free(item.origin);
+            list.deinit(allocator);
+        }
+        while (true) {
+            const rc = sqlite3_step(statement);
+            if (rc == done) break;
+            if (rc != row) return error.Sqlite;
+            try list.append(allocator, .{ .repository_id = sqlite3_column_int64(statement, 0), .origin = try columnString(allocator, statement, 1), .count = sqlite3_column_int64(statement, 2) });
+        }
+        return try list.toOwnedSlice(allocator);
+    }
+
+    fn sourceObservations(self: *Database, allocator: std.mem.Allocator, sql: []const u8, values: anytype) ![]SourceObservation {
+        const zsql = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(zsql);
+        const statement = try self.prepare(zsql);
+        defer _ = sqlite3_finalize(statement);
+        try bindAll(statement, values);
+        var list = std.ArrayList(SourceObservation).empty;
+        errdefer {
+            for (list.items) |*item| item.deinit(allocator);
+            list.deinit(allocator);
+        }
+        while (true) {
+            const rc = sqlite3_step(statement);
+            if (rc == done) break;
+            if (rc != row) return error.Sqlite;
+            try list.append(allocator, .{ .id = sqlite3_column_int64(statement, 0), .repository_id = sqlite3_column_int64(statement, 1), .repository_origin = try columnString(allocator, statement, 2), .commit_sha = try columnString(allocator, statement, 3), .file_path = try columnString(allocator, statement, 4), .classification = try columnString(allocator, statement, 5), .line = sqlite3_column_int64(statement, 6), .column = sqlite3_column_int64(statement, 7), .raw_json = try columnString(allocator, statement, 8) });
+        }
+        return try list.toOwnedSlice(allocator);
+    }
+
     fn exec(self: *Database, sql: [:0]const u8) !void {
         if (sqlite3_exec(self.db, sql, null, null, null) != ok) return error.Sqlite;
     }
@@ -254,7 +387,9 @@ pub const Database = struct {
         return statement.?;
     }
     fn execute(self: *Database, sql: [:0]const u8, values: anytype) !void {
-        const statement = try self.prepare(sql);
+        const zsql = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(zsql);
+        const statement = try self.prepare(zsql);
         defer _ = sqlite3_finalize(statement);
         try bindAll(statement, values);
         if (sqlite3_step(statement) != done) return error.Sqlite;
@@ -264,14 +399,18 @@ pub const Database = struct {
         return self.one("SELECT last_insert_rowid();", .{});
     }
     fn one(self: *Database, sql: [:0]const u8, values: anytype) !i64 {
-        const statement = try self.prepare(sql);
+        const zsql = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(zsql);
+        const statement = try self.prepare(zsql);
         defer _ = sqlite3_finalize(statement);
         try bindAll(statement, values);
         if (sqlite3_step(statement) != row) return error.Sqlite;
         return sqlite3_column_int64(statement, 0);
     }
     fn oneOrNull(self: *Database, sql: [:0]const u8, values: anytype) !?i64 {
-        const statement = try self.prepare(sql);
+        const zsql = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(zsql);
+        const statement = try self.prepare(zsql);
         defer _ = sqlite3_finalize(statement);
         try bindAll(statement, values);
         const rc = sqlite3_step(statement);
@@ -280,7 +419,9 @@ pub const Database = struct {
         return sqlite3_column_int64(statement, 0);
     }
     fn string(self: *Database, sql: [:0]const u8, values: anytype) ![]u8 {
-        const statement = try self.prepare(sql);
+        const zsql = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(zsql);
+        const statement = try self.prepare(zsql);
         defer _ = sqlite3_finalize(statement);
         try bindAll(statement, values);
         if (sqlite3_step(statement) != row) return error.Sqlite;
@@ -289,6 +430,11 @@ pub const Database = struct {
         return try self.allocator.dupe(u8, ptr[0..@intCast(len)]);
     }
 };
+fn columnString(allocator: std.mem.Allocator, statement: *Stmt, index: c_int) ![]u8 {
+    const ptr = sqlite3_column_text(statement, index) orelse return allocator.dupe(u8, "");
+    const len = sqlite3_column_bytes(statement, index);
+    return allocator.dupe(u8, ptr[0..@intCast(len)]);
+}
 fn bindAll(statement: *Stmt, values: anytype) !void {
     inline for (values, 1..) |value, i| try bind(statement, @intCast(i), value);
 }
@@ -315,6 +461,7 @@ const migration_1 =
     "CREATE INDEX observations_run_file ON observations(analysis_run_id,file_id);";
 
 const migration_2 = "ALTER TABLE observations ADD COLUMN block_syntax TEXT;";
+const migration_3 = "ALTER TABLE files ADD COLUMN classification TEXT NOT NULL DEFAULT 'production';";
 
 test "fresh migration stores versioned raw observations and provenance" {
     var db = try Database.open(std.testing.allocator, ":memory:");
@@ -352,4 +499,32 @@ test "failed runs are preserved separately from completed runs" {
     const id = try db.beginRun(.{ .repository_id = repo, .commit_id = commit, .rgp_version = "r", .prism_version = "p", .classifier_version = "c", .taxonomy_version = "t" });
     try db.finishRun(id, .failed, "parse diagnostic");
     try std.testing.expectEqual(@as(i64, 2), try db.runStatus(id));
+}
+
+test "statistics are reproducible, filtered, and carry source provenance" {
+    var db = try Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+    const repo = try db.addRepository("project-a");
+    const commit = try db.addCommit(repo, "sha-a");
+    const file = try db.addFileClassified(commit, "test/example_test.rb", "hash", "test");
+    const snapshot = try db.addSnapshot("fixtures", "manifest-a");
+    const construct = try db.addConstruct("map");
+    _ = try db.persistCompleted(.{ .repository_id = repo, .commit_id = commit, .snapshot_id = snapshot, .rgp_version = "rgp", .prism_version = "prism", .classifier_version = "classifier", .taxonomy_version = "taxonomy" }, &.{.{ .repository_id = repo, .commit_id = commit, .file_id = file, .start_offset = 0, .end_offset = 3, .line = 4, .column = 2, .node_kind = "PM_CALL_NODE", .raw_json = "{}", .construct_id = construct, .receiver_kind = null }});
+    var stats = try db.queryStatistics(std.testing.allocator, &.{"map"}, .{ .snapshot_id = snapshot, .classification = "test", .receiver_kind = "array" });
+    try std.testing.expectEqual(@as(usize, 1), stats.len);
+    try std.testing.expectEqual(@as(i64, 0), stats[0].count);
+    try std.testing.expectEqual(@as(i64, 0), stats[0].denominator);
+    try std.testing.expect(stats[0].percentage == null);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].supporting_observations.len);
+
+    for (stats) |*stat| stat.deinit(std.testing.allocator);
+    std.testing.allocator.free(stats);
+
+    stats = try db.queryStatistics(std.testing.allocator, &.{"map"}, .{ .snapshot_id = snapshot, .classification = "test" });
+    try std.testing.expectEqual(@as(i64, 1), stats[0].count);
+    try std.testing.expectEqual(@as(i64, 1), stats[0].denominator);
+    try std.testing.expectEqual(@as(usize, 1), stats[0].projects.len);
+    try std.testing.expectEqualStrings("test/example_test.rb", stats[0].supporting_observations[0].file_path);
+    for (stats) |*stat| stat.deinit(std.testing.allocator);
+    std.testing.allocator.free(stats);
 }
