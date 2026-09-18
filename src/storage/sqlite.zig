@@ -20,7 +20,7 @@ const ok = 0;
 const row = 100;
 const done = 101;
 const transient: ?*const anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
-pub const latest_schema_version = 1;
+pub const latest_schema_version = 2;
 
 pub const Run = struct {
     repository_id: i64,
@@ -45,6 +45,7 @@ pub const Observation = struct {
     topic_id: ?i64 = null,
     name: ?[]const u8 = null,
     receiver_kind: ?[]const u8 = null,
+    block_syntax: ?[]const u8 = null,
 };
 
 pub const Database = struct {
@@ -73,6 +74,7 @@ pub const Database = struct {
         const current = try self.one("SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", .{});
         if (current > latest_schema_version) return error.MigrationTooNew;
         if (current < 1) try self.exec("BEGIN IMMEDIATE;" ++ migration_1 ++ "INSERT INTO schema_migrations VALUES(1);COMMIT;");
+        if (current < 2) try self.exec("BEGIN IMMEDIATE;" ++ migration_2 ++ "INSERT INTO schema_migrations VALUES(2);COMMIT;");
     }
     pub fn schemaVersion(self: *Database) !i64 {
         return self.one("SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", .{});
@@ -206,7 +208,7 @@ pub const Database = struct {
         try self.execute("UPDATE analysis_runs SET status=?2,failure=?3,finished_at=unixepoch() WHERE id=?1 AND status='running';", .{ id, @tagName(status), failure });
     }
     pub fn addObservation(self: *Database, run_id: i64, value: Observation) !i64 {
-        return self.insert("INSERT INTO observations(analysis_run_id,repository_id,commit_id,file_id,start_offset,end_offset,line,column,node_kind,raw_json,construct_id,topic_id,name,receiver_kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14);", .{ run_id, value.repository_id, value.commit_id, value.file_id, value.start_offset, value.end_offset, value.line, value.column, value.node_kind, value.raw_json, value.construct_id, value.topic_id, value.name, value.receiver_kind });
+        return self.insert("INSERT INTO observations(analysis_run_id,repository_id,commit_id,file_id,start_offset,end_offset,line,column,node_kind,raw_json,construct_id,topic_id,name,receiver_kind,block_syntax) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15);", .{ run_id, value.repository_id, value.commit_id, value.file_id, value.start_offset, value.end_offset, value.line, value.column, value.node_kind, value.raw_json, value.construct_id, value.topic_id, value.name, value.receiver_kind, value.block_syntax });
     }
     pub fn count(self: *Database, comptime table: []const u8) !i64 {
         return self.one("SELECT COUNT(*) FROM " ++ table ++ ";", .{});
@@ -312,10 +314,12 @@ const migration_1 =
     "CREATE TRIGGER observation_provenance BEFORE INSERT ON observations WHEN (SELECT repository_id FROM analysis_runs WHERE id=NEW.analysis_run_id)!=NEW.repository_id OR (SELECT commit_id FROM analysis_runs WHERE id=NEW.analysis_run_id)!=NEW.commit_id OR (SELECT commit_id FROM files WHERE id=NEW.file_id)!=NEW.commit_id BEGIN SELECT RAISE(ABORT,'observation provenance');END;" ++
     "CREATE INDEX observations_run_file ON observations(analysis_run_id,file_id);";
 
+const migration_2 = "ALTER TABLE observations ADD COLUMN block_syntax TEXT;";
+
 test "fresh migration stores versioned raw observations and provenance" {
     var db = try Database.open(std.testing.allocator, ":memory:");
     defer db.deinit();
-    try std.testing.expectEqual(@as(i64, 1), try db.schemaVersion());
+    try std.testing.expectEqual(@as(i64, latest_schema_version), try db.schemaVersion());
     const repo = try db.addRepository("https://example.test/ruby.git");
     const commit = try db.addCommit(repo, "abc");
     const file = try db.addFile(commit, "a.rb", "source");

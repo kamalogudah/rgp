@@ -7,6 +7,7 @@ and rejected input; their paths identify the expected classification.
 | Fixture | Purpose |
 | --- | --- |
 | `phase1_constructs.rb` | Conditionals, loops, definitions, classes/modules, calls, blocks, arrays/hashes, assignments, and rescue. |
+| `construct_catalog.rb` | Exact-count coverage for the 23 initial construct measurements, including Phase 3 comparison families and block syntax forms. |
 | `nested_multiline.rb` | Nested multiline blocks and one-based source-span regression coverage. |
 | `ambiguous_calls.rb` | Ruby command-call, regexp, and division forms whose interpretation depends on syntax context. |
 | `ruby_2_7_pattern_matching.rb` | Ruby 2.7+ pattern-matching syntax. |

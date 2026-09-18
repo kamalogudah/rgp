@@ -2,6 +2,16 @@
 schema_version = 1
 
 [[topic]]
+id = "conditionals"
+title = "Conditionals"
+constructs = ["if", "unless", "case"]
+
+[[topic]]
+id = "loops_and_iteration"
+title = "Loops and Iteration"
+constructs = ["while", "until", "for", "each", "times"]
+
+[[topic]]
 id = "collections"
 title = "Collections"
 
@@ -10,3 +20,41 @@ id = "collections.cardinality"
 title = "Collection Cardinality"
 parent = "collections"
 constructs = ["size", "length", "count"]
+
+[[topic]]
+id = "collections.transformation"
+title = "Collection Transformation"
+parent = "collections"
+constructs = ["map", "collect"]
+
+[[topic]]
+id = "collections.filtering"
+title = "Collection Filtering"
+parent = "collections"
+constructs = ["select", "filter", "reject"]
+
+[[topic]]
+id = "collections.aggregation"
+title = "Collection Aggregation"
+parent = "collections"
+constructs = ["reduce", "inject"]
+
+[[topic]]
+id = "methods"
+title = "Methods"
+constructs = ["def"]
+
+[[topic]]
+id = "oop"
+title = "Object-Oriented Ruby"
+constructs = ["class", "module"]
+
+[[topic]]
+id = "blocks"
+title = "Blocks"
+constructs = ["block"]
+
+[[topic]]
+id = "exceptions"
+title = "Exceptions"
+constructs = ["rescue"]
