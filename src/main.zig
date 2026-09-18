@@ -13,8 +13,10 @@ const usage =
     "  help, --help, -h       Show this help\n" ++
     "  --version, -V          Show the RGP version\n" ++
     "  analyze [path | --corpus]  Analyze a repository or the whole corpus\n" ++
-    "  corpus                 Manage the analyzed corpus\n" ++
-    "  parse <file>           Parse a Ruby file and emit JSON\n" ++
+    "  compare <construct>...  Compare construct counts and percentages\n" ++
+    "  report [topic]          Report on a taxonomy topic\n" ++
+    "  corpus                  Manage the analyzed corpus\n" ++
+    "  parse <file>            Parse a Ruby file and emit JSON\n" ++
     "\n" ++
     "Run `rgp corpus` for corpus-management usage.\n";
 
@@ -53,6 +55,12 @@ fn run(args: []const []const u8, writer: *Io.Writer, io: Io, allocator: std.mem.
     }
     if (args.len > 0 and std.mem.eql(u8, args[0], "analyze")) {
         return rgp.cli.analyze.run(io, allocator, args[1..], writer);
+    }
+    if (args.len > 0 and std.mem.eql(u8, args[0], "compare")) {
+        return rgp.cli.compare.run(io, allocator, args[1..], writer);
+    }
+    if (args.len > 0 and std.mem.eql(u8, args[0], "report")) {
+        return rgp.cli.report.run(io, allocator, args[1..], writer);
     }
     if (args.len > 0 and std.mem.eql(u8, args[0], "corpus")) {
         return rgp.cli.corpus.run(io, allocator, args[1..], writer);

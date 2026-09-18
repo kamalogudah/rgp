@@ -16,6 +16,8 @@ pub const storage = @import("storage/sqlite.zig");
 pub const repository = @import("repository/discovery.zig");
 /// Incremental analysis pipeline and observation extraction.
 pub const analysis = @import("analysis/root.zig");
+/// Reproducible statistics and provenance rendering.
+pub const reports = @import("reports/statistics.zig");
 /// Corpus manifest and snapshot materialization.
 pub const corpus = @import("corpus/root.zig");
 /// CLI command adapters.
@@ -26,6 +28,7 @@ pub const cli = @import("cli/root.zig");
 test {
     std.testing.refAllDecls(repository);
     std.testing.refAllDecls(analysis);
+    std.testing.refAllDecls(reports);
 }
 
 pub const version = "0.1.0-dev";

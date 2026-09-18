@@ -60,6 +60,30 @@ pub const StatisticsQuery = struct {
     taxonomy_version: ?[]const u8 = null,
 };
 
+/// The filter values that produced a statistic, preserved so every reported
+/// value can be reproduced from deterministic observations.
+pub const AppliedFilter = struct {
+    snapshot_id: ?i64 = null,
+    repository_origin: ?[]u8 = null,
+    classification: ?[]u8 = null,
+    receiver_kind: ?[]u8 = null,
+    rgp_version: ?[]u8 = null,
+    prism_version: ?[]u8 = null,
+    classifier_version: ?[]u8 = null,
+    taxonomy_version: ?[]u8 = null,
+
+    pub fn deinit(self: *AppliedFilter, allocator: std.mem.Allocator) void {
+        if (self.repository_origin) |s| allocator.free(s);
+        if (self.classification) |s| allocator.free(s);
+        if (self.receiver_kind) |s| allocator.free(s);
+        if (self.rgp_version) |s| allocator.free(s);
+        if (self.prism_version) |s| allocator.free(s);
+        if (self.classifier_version) |s| allocator.free(s);
+        if (self.taxonomy_version) |s| allocator.free(s);
+        self.* = .{};
+    }
+};
+
 pub const SourceObservation = struct {
     id: i64,
     repository_id: i64,
@@ -88,6 +112,7 @@ pub const Statistic = struct {
     prism_version: []u8,
     classifier_version: []u8,
     taxonomy_version: []u8,
+    filters: AppliedFilter,
     denominator: i64,
     count: i64,
     percentage: ?f64,
@@ -99,6 +124,7 @@ pub const Statistic = struct {
         allocator.free(self.prism_version);
         allocator.free(self.classifier_version);
         allocator.free(self.taxonomy_version);
+        self.filters.deinit(allocator);
         for (self.projects) |project| allocator.free(project.origin);
         allocator.free(self.projects);
         for (self.supporting_observations) |*source| source.deinit(allocator);
@@ -315,6 +341,10 @@ pub const Database = struct {
         try self.execute("UPDATE analysis_runs SET status='failed',failure=?1,finished_at=unixepoch() WHERE commit_id=?2 AND status='running';", .{ message, commit_id });
     }
 
+    /// Derive counts, percentages, project distribution, and corpus denominators
+    /// from completed observations. Each result carries the filter values that
+    /// produced it, the analyzer versions that observed the facts, and the
+    /// supporting source observations for provenance.
     pub fn queryStatistics(self: *Database, allocator: std.mem.Allocator, constructs: []const []const u8, q: StatisticsQuery) ![]Statistic {
         var result = std.ArrayList(Statistic).empty;
         errdefer {
@@ -324,7 +354,7 @@ pub const Database = struct {
         for (constructs) |construct| {
             const common = .{ q.snapshot_id, q.repository_id, q.repository_origin, q.classification, q.receiver_kind, q.rgp_version, q.prism_version, q.classifier_version, q.taxonomy_version };
             const args = .{ q.snapshot_id, q.repository_id, q.repository_origin, q.classification, q.receiver_kind, q.rgp_version, q.prism_version, q.classifier_version, q.taxonomy_version, construct };
-            const where = " FROM observations o JOIN analysis_runs r ON r.id=o.analysis_run_id JOIN files f ON f.id=o.file_id JOIN repositories p ON p.id=o.repository_id JOIN commits cm ON cm.id=o.commit_id JOIN constructs c ON c.id=o.construct_id WHERE r.status=\"completed\" AND (?1 IS NULL OR r.snapshot_id=?1) AND (?2 IS NULL OR o.repository_id=?2) AND (?3 IS NULL OR p.origin=?3) AND (?4 IS NULL OR f.classification=?4) AND (?5 IS NULL OR o.receiver_kind=?5) AND (?6 IS NULL OR r.rgp_version=?6) AND (?7 IS NULL OR r.prism_version=?7) AND (?8 IS NULL OR r.classifier_version=?8) AND (?9 IS NULL OR r.taxonomy_version=?9)";
+            const where = " FROM observations o JOIN analysis_runs r ON r.id=o.analysis_run_id JOIN files f ON f.id=o.file_id JOIN repositories p ON p.id=o.repository_id JOIN commits cm ON cm.id=o.commit_id JOIN constructs c ON c.id=o.construct_id WHERE r.status='completed' AND (?1 IS NULL OR r.snapshot_id=?1) AND (?2 IS NULL OR o.repository_id=?2) AND (?3 IS NULL OR p.origin=?3) AND (?4 IS NULL OR f.classification=?4) AND (?5 IS NULL OR o.receiver_kind=?5) AND (?6 IS NULL OR r.rgp_version=?6) AND (?7 IS NULL OR r.prism_version=?7) AND (?8 IS NULL OR r.classifier_version=?8) AND (?9 IS NULL OR r.taxonomy_version=?9)";
             const denominator = try self.one("SELECT COUNT(*)" ++ where, common);
             const matches = try self.one("SELECT COUNT(*)" ++ where ++ " AND c.name=?10", args);
             const version = try self.string("SELECT COALESCE(MIN(r.rgp_version), char(117,110,107,110,111,119,110))" ++ where, common);
@@ -333,9 +363,30 @@ pub const Database = struct {
             const taxonomy_version = try self.string("SELECT COALESCE(MIN(r.taxonomy_version), char(117,110,107,110,111,119,110))" ++ where, common);
             const projects = try self.projectCounts(allocator, "SELECT o.repository_id,p.origin,COUNT(*)" ++ where ++ " AND c.name=?10 GROUP BY o.repository_id,p.origin ORDER BY o.repository_id", args);
             const supporting = try self.sourceObservations(allocator, "SELECT o.id,o.repository_id,p.origin,coalesce(cm.sha, char(117,110,107,110,111,119,110)),f.path,f.classification,o.line,o.column,o.raw_json" ++ where ++ " AND c.name=?10 ORDER BY o.id", args);
-            try result.append(allocator, .{ .construct = try allocator.dupe(u8, construct), .snapshot_id = q.snapshot_id, .rgp_version = version, .prism_version = prism_version, .classifier_version = classifier_version, .taxonomy_version = taxonomy_version, .denominator = denominator, .count = matches, .percentage = if (denominator == 0) null else @as(f64, @floatFromInt(matches)) * 100.0 / @as(f64, @floatFromInt(denominator)), .projects = projects, .supporting_observations = supporting });
+            try result.append(allocator, .{
+                .construct = try allocator.dupe(u8, construct),
+                .snapshot_id = q.snapshot_id,
+                .rgp_version = version,
+                .prism_version = prism_version,
+                .classifier_version = classifier_version,
+                .taxonomy_version = taxonomy_version,
+                .filters = try appliedFilter(allocator, q),
+                .denominator = denominator,
+                .count = matches,
+                .percentage = if (denominator == 0) null else @as(f64, @floatFromInt(matches)) * 100.0 / @as(f64, @floatFromInt(denominator)),
+                .projects = projects,
+                .supporting_observations = supporting,
+            });
         }
         return try result.toOwnedSlice(allocator);
+    }
+
+    /// Returns true when any analysis run matching the query filters is not
+    /// completed, so callers can warn that the corpus may be incomplete.
+    pub fn hasIncompleteRuns(self: *Database, q: StatisticsQuery) !bool {
+        const common = .{ q.snapshot_id, q.repository_id, q.repository_origin, q.rgp_version, q.prism_version, q.classifier_version, q.taxonomy_version };
+        const where = " FROM analysis_runs r JOIN repositories p ON p.id=r.repository_id WHERE r.status!='completed' AND (?1 IS NULL OR r.snapshot_id=?1) AND (?2 IS NULL OR r.repository_id=?2) AND (?3 IS NULL OR p.origin=?3) AND (?4 IS NULL OR r.rgp_version=?4) AND (?5 IS NULL OR r.prism_version=?5) AND (?6 IS NULL OR r.classifier_version=?6) AND (?7 IS NULL OR r.taxonomy_version=?7)";
+        return (try self.one("SELECT COUNT(*)" ++ where, common)) > 0;
     }
 
     fn projectCounts(self: *Database, allocator: std.mem.Allocator, sql: []const u8, values: anytype) ![]ProjectCount {
@@ -435,6 +486,23 @@ fn columnString(allocator: std.mem.Allocator, statement: *Stmt, index: c_int) ![
     const len = sqlite3_column_bytes(statement, index);
     return allocator.dupe(u8, ptr[0..@intCast(len)]);
 }
+
+fn dupeOptional(allocator: std.mem.Allocator, value: ?[]const u8) std.mem.Allocator.Error!?[]u8 {
+    return if (value) |v| try allocator.dupe(u8, v) else null;
+}
+
+fn appliedFilter(allocator: std.mem.Allocator, q: StatisticsQuery) std.mem.Allocator.Error!AppliedFilter {
+    return .{
+        .snapshot_id = q.snapshot_id,
+        .repository_origin = try dupeOptional(allocator, q.repository_origin),
+        .classification = try dupeOptional(allocator, q.classification),
+        .receiver_kind = try dupeOptional(allocator, q.receiver_kind),
+        .rgp_version = try dupeOptional(allocator, q.rgp_version),
+        .prism_version = try dupeOptional(allocator, q.prism_version),
+        .classifier_version = try dupeOptional(allocator, q.classifier_version),
+        .taxonomy_version = try dupeOptional(allocator, q.taxonomy_version),
+    };
+}
 fn bindAll(statement: *Stmt, values: anytype) !void {
     inline for (values, 1..) |value, i| try bind(statement, @intCast(i), value);
 }
@@ -527,4 +595,112 @@ test "statistics are reproducible, filtered, and carry source provenance" {
     try std.testing.expectEqualStrings("test/example_test.rb", stats[0].supporting_observations[0].file_path);
     for (stats) |*stat| stat.deinit(std.testing.allocator);
     std.testing.allocator.free(stats);
+}
+
+test "empty corpus returns zero counts with null percentage and unknown versions" {
+    var db = try Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+
+    const stats = try db.queryStatistics(std.testing.allocator, &.{"each"}, .{});
+    defer {
+        for (stats) |*stat| stat.deinit(std.testing.allocator);
+        std.testing.allocator.free(stats);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), stats.len);
+    try std.testing.expectEqual(@as(i64, 0), stats[0].count);
+    try std.testing.expectEqual(@as(i64, 0), stats[0].denominator);
+    try std.testing.expect(stats[0].percentage == null);
+    try std.testing.expectEqualStrings("unknown", stats[0].rgp_version);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].projects.len);
+    try std.testing.expectEqual(@as(usize, 0), stats[0].supporting_observations.len);
+}
+
+test "production and test observations are not mixed without an explicit filter" {
+    var db = try Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+    const repo = try db.addRepository("project-b");
+    const commit = try db.addCommit(repo, "sha-b");
+    const prod_file = try db.addFileClassified(commit, "lib/a.rb", "hash1", "production");
+    const test_file = try db.addFileClassified(commit, "test/a_test.rb", "hash2", "test");
+    const construct = try db.addConstruct("each");
+    _ = try db.persistCompleted(.{ .repository_id = repo, .commit_id = commit, .rgp_version = "r", .prism_version = "p", .classifier_version = "c", .taxonomy_version = "t" }, &.{
+        .{ .repository_id = repo, .commit_id = commit, .file_id = prod_file, .start_offset = 0, .end_offset = 4, .line = 1, .column = 1, .node_kind = "PM_CALL_NODE", .raw_json = "{}", .construct_id = construct },
+        .{ .repository_id = repo, .commit_id = commit, .file_id = test_file, .start_offset = 0, .end_offset = 4, .line = 1, .column = 1, .node_kind = "PM_CALL_NODE", .raw_json = "{}", .construct_id = construct },
+    });
+
+    const unfiltered = try db.queryStatistics(std.testing.allocator, &.{"each"}, .{});
+    defer {
+        for (unfiltered) |*stat| stat.deinit(std.testing.allocator);
+        std.testing.allocator.free(unfiltered);
+    }
+    try std.testing.expectEqual(@as(i64, 2), unfiltered[0].denominator);
+    try std.testing.expectEqual(@as(i64, 2), unfiltered[0].count);
+
+    const prod_only = try db.queryStatistics(std.testing.allocator, &.{"each"}, .{ .classification = "production" });
+    defer {
+        for (prod_only) |*stat| stat.deinit(std.testing.allocator);
+        std.testing.allocator.free(prod_only);
+    }
+    try std.testing.expectEqual(@as(i64, 1), prod_only[0].denominator);
+    try std.testing.expectEqual(@as(i64, 1), prod_only[0].count);
+
+    const test_only = try db.queryStatistics(std.testing.allocator, &.{"each"}, .{ .classification = "test" });
+    defer {
+        for (test_only) |*stat| stat.deinit(std.testing.allocator);
+        std.testing.allocator.free(test_only);
+    }
+    try std.testing.expectEqual(@as(i64, 1), test_only[0].denominator);
+    try std.testing.expectEqual(@as(i64, 1), test_only[0].count);
+}
+
+test "unknown receiver kind is not mixed into known receiver contexts" {
+    var db = try Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+    const repo = try db.addRepository("project-c");
+    const commit = try db.addCommit(repo, "sha-c");
+    const file = try db.addFile(commit, "lib/a.rb", "hash");
+    const construct = try db.addConstruct("size");
+    _ = try db.persistCompleted(.{ .repository_id = repo, .commit_id = commit, .rgp_version = "r", .prism_version = "p", .classifier_version = "c", .taxonomy_version = "t" }, &.{
+        .{ .repository_id = repo, .commit_id = commit, .file_id = file, .start_offset = 0, .end_offset = 4, .line = 1, .column = 1, .node_kind = "PM_CALL_NODE", .raw_json = "{}", .construct_id = construct, .receiver_kind = "array" },
+        .{ .repository_id = repo, .commit_id = commit, .file_id = file, .start_offset = 5, .end_offset = 9, .line = 2, .column = 1, .node_kind = "PM_CALL_NODE", .raw_json = "{}", .construct_id = construct, .receiver_kind = "other" },
+    });
+
+    const array_only = try db.queryStatistics(std.testing.allocator, &.{"size"}, .{ .receiver_kind = "array" });
+    defer {
+        for (array_only) |*stat| stat.deinit(std.testing.allocator);
+        std.testing.allocator.free(array_only);
+    }
+    try std.testing.expectEqual(@as(i64, 1), array_only[0].denominator);
+    try std.testing.expectEqual(@as(i64, 1), array_only[0].count);
+
+    const unknown_only = try db.queryStatistics(std.testing.allocator, &.{"size"}, .{ .receiver_kind = "other" });
+    defer {
+        for (unknown_only) |*stat| stat.deinit(std.testing.allocator);
+        std.testing.allocator.free(unknown_only);
+    }
+    try std.testing.expectEqual(@as(i64, 1), unknown_only[0].denominator);
+    try std.testing.expectEqual(@as(i64, 1), unknown_only[0].count);
+}
+
+test "incomplete runs are detected independently of completed observations" {
+    var db = try Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+    const repo = try db.addRepository("project-d");
+    const commit = try db.addCommit(repo, "sha-d");
+    const file = try db.addFile(commit, "lib/a.rb", "hash");
+    const construct = try db.addConstruct("each");
+    _ = try db.persistCompleted(.{ .repository_id = repo, .commit_id = commit, .rgp_version = "r", .prism_version = "p", .classifier_version = "c", .taxonomy_version = "t" }, &.{.{ .repository_id = repo, .commit_id = commit, .file_id = file, .start_offset = 0, .end_offset = 4, .line = 1, .column = 1, .node_kind = "PM_CALL_NODE", .raw_json = "{}", .construct_id = construct }});
+
+    const stale = try db.beginRun(.{ .repository_id = repo, .commit_id = commit, .rgp_version = "r", .prism_version = "p", .classifier_version = "c", .taxonomy_version = "t" });
+    try std.testing.expect(try db.hasIncompleteRuns(.{}));
+    try db.finishRun(stale, .failed, "interrupted");
+    try std.testing.expect(try db.hasIncompleteRuns(.{}));
+
+    const stats = try db.queryStatistics(std.testing.allocator, &.{"each"}, .{});
+    defer {
+        for (stats) |*stat| stat.deinit(std.testing.allocator);
+        std.testing.allocator.free(stats);
+    }
+    try std.testing.expectEqual(@as(i64, 1), stats[0].count);
 }
