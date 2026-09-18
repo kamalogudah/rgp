@@ -2,7 +2,9 @@
 const std = @import("std");
 
 pub const corpus = @import("corpus.zig");
+pub const analyze = @import("analyze.zig");
 
 test {
     std.testing.refAllDecls(corpus);
+    std.testing.refAllDecls(analyze);
 }
