@@ -163,7 +163,7 @@ pub fn analyze(allocator: std.mem.Allocator, io: Io, db: *storage.Database, targ
         }
 
         try reanalyzed_file_ids.append(allocator, file_record.id);
-        const file_result = try analyzeFile(allocator, source, file.path, repo_id, commit_id, file_record.id, versions, &observations);
+        const file_result = try analyzeFile(allocator, db, source, file.path, repo_id, commit_id, file_record.id, &observations);
         try file_results.append(allocator, file_result);
     }
 
@@ -209,7 +209,7 @@ pub fn analyze(allocator: std.mem.Allocator, io: Io, db: *storage.Database, targ
     };
 }
 
-fn analyzeFile(allocator: std.mem.Allocator, source: []const u8, path: []const u8, repository_id: i64, commit_id: i64, file_id: i64, versions: AnalyzerVersions, observations: *std.ArrayList(storage.Observation)) Error!FileResult {
+fn analyzeFile(allocator: std.mem.Allocator, db: *storage.Database, source: []const u8, path: []const u8, repository_id: i64, commit_id: i64, file_id: i64, observations: *std.ArrayList(storage.Observation)) Error!FileResult {
     var document = prism.parse(allocator, source, .{ .path = path }) catch |err| {
         const message = try std.fmt.allocPrint(allocator, "cannot parse `{s}`: {s}", .{ path, @errorName(err) });
         return .{ .path = try allocator.dupe(u8, path), .status = .failed, .observations = 0, .message = message };
@@ -230,7 +230,7 @@ fn analyzeFile(allocator: std.mem.Allocator, source: []const u8, path: []const u
     for (extracted) |obs| {
         const raw_json = try obs.json(allocator);
         errdefer allocator.free(raw_json);
-        const construct_id = try constructIdFor(allocator, versions, obs.construct);
+        const construct_id = try constructIdFor(db, obs.construct);
         const name_copy: ?[]u8 = if (obs.name) |n| try allocator.dupe(u8, n) else null;
         errdefer if (name_copy) |n| allocator.free(n);
         try observations.append(allocator, .{
@@ -246,20 +246,15 @@ fn analyzeFile(allocator: std.mem.Allocator, source: []const u8, path: []const u
             .construct_id = construct_id,
             .name = name_copy,
             .receiver_kind = obs.receiver_kind,
+            .block_syntax = obs.block_syntax,
         });
     }
 
     return .{ .path = try allocator.dupe(u8, path), .status = .analyzed, .observations = extracted.len };
 }
 
-fn constructIdFor(allocator: std.mem.Allocator, versions: AnalyzerVersions, construct: []const u8) Error!?i64 {
-    // Constructs are not yet versioned independently; the analyzer-version
-    // invalidation already handles classifier changes. Return null so the
-    // database stores a NULL construct_id until the taxonomy layer is wired.
-    _ = allocator;
-    _ = versions;
-    _ = construct;
-    return null;
+fn constructIdFor(db: *storage.Database, construct: []const u8) Error!?i64 {
+    return try db.getOrAddConstruct(construct);
 }
 
 fn buildFailureMessage(allocator: std.mem.Allocator, files_failed: usize, file_results: []const FileResult) std.mem.Allocator.Error![]u8 {
