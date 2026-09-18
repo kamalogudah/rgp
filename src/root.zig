@@ -15,6 +15,12 @@ pub const prism = @import("prism/parser.zig");
 pub const storage = @import("storage/sqlite.zig");
 pub const repository = @import("repository/discovery.zig");
 
+// Force analysis of the repository discovery module so its declarations and
+// tests are compiled and exercised by the deterministic test build.
+test {
+    std.testing.refAllDecls(repository);
+}
+
 pub const version = "0.1.0-dev";
 
 pub const Command = enum {
