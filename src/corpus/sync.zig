@@ -102,10 +102,9 @@ pub fn isMaterialized(io: Io, repo: manifest.Repository, cache_root: []const u8)
 
 pub fn resolveLocalPath(allocator: std.mem.Allocator, io: Io, source: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(source)) return try allocator.dupe(u8, source);
-    var buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd = Io.Dir.cwd();
-    const len = try cwd.realPath(io, &buffer);
-    return try std.fs.path.join(allocator, &.{ buffer[0..len], source });
+    const cwd = try std.process.currentPathAlloc(io, allocator);
+    defer allocator.free(cwd);
+    return try std.fs.path.join(allocator, &.{ cwd, source });
 }
 
 test "local path sync reports missing directory" {

@@ -13,6 +13,8 @@ extern fn sqlite3_bind_int64(*Stmt, c_int, i64) c_int;
 extern fn sqlite3_bind_text(*Stmt, c_int, [*]const u8, c_int, ?*const anyopaque) c_int;
 extern fn sqlite3_bind_null(*Stmt, c_int) c_int;
 extern fn sqlite3_column_int64(*Stmt, c_int) i64;
+extern fn sqlite3_column_text(*Stmt, c_int) ?[*:0]const u8;
+extern fn sqlite3_column_bytes(*Stmt, c_int) c_int;
 
 const ok = 0;
 const row = 100;
@@ -47,6 +49,7 @@ pub const Observation = struct {
 
 pub const Database = struct {
     db: *Db,
+    allocator: std.mem.Allocator,
 
     pub fn open(allocator: std.mem.Allocator, path: []const u8) !Database {
         const zpath = try allocator.dupeZ(u8, path);
@@ -54,7 +57,7 @@ pub const Database = struct {
         var raw: ?*Db = null;
         if (sqlite3_open_v2(zpath, &raw, 2 | 4, null) != ok) return error.Sqlite;
         errdefer _ = sqlite3_close_v2(raw.?);
-        var result = Database{ .db = raw.? };
+        var result = Database{ .db = raw.?, .allocator = allocator };
         try result.exec("PRAGMA foreign_keys = ON;");
         try result.migrate();
         return result;
@@ -78,17 +81,58 @@ pub const Database = struct {
     pub fn addRepository(self: *Database, origin: []const u8) !i64 {
         return self.insert("INSERT INTO repositories(origin) VALUES(?1);", .{origin});
     }
+    pub fn repositoryId(self: *Database, origin: []const u8) !i64 {
+        if (try self.oneOrNull("SELECT id FROM repositories WHERE origin=?1;", .{origin})) |id| return id;
+        return self.addRepository(origin);
+    }
     pub fn addCommit(self: *Database, repo: i64, sha: []const u8) !i64 {
         return self.insert("INSERT INTO commits(repository_id,sha) VALUES(?1,?2);", .{ repo, sha });
+    }
+    pub fn commitId(self: *Database, repo: i64, sha: []const u8) !i64 {
+        if (try self.oneOrNull("SELECT id FROM commits WHERE repository_id=?1 AND sha=?2;", .{ repo, sha })) |id| return id;
+        return self.addCommit(repo, sha);
     }
     pub fn addFile(self: *Database, commit: i64, path: []const u8, hash: []const u8) !i64 {
         return self.insert("INSERT INTO files(commit_id,path,source_sha256) VALUES(?1,?2,?3);", .{ commit, path, hash });
     }
+
+    pub const FileRecord = struct { id: i64, hash: []const u8, changed: bool };
+
+    /// Returns the existing file id when the path and hash match; otherwise
+    /// updates the stored hash and returns the same id so callers can detect
+    /// changed files and invalidate stale observations.
+    pub fn upsertFile(self: *Database, commit: i64, path: []const u8, hash: []const u8) !FileRecord {
+        if (try self.oneOrNull("SELECT id, source_sha256 FROM files WHERE commit_id=?1 AND path=?2;", .{ commit, path })) |id| {
+            const stored_hash = try self.string("SELECT source_sha256 FROM files WHERE id=?1;", .{id});
+            defer self.allocator.free(stored_hash);
+            if (std.mem.eql(u8, stored_hash, hash)) return .{ .id = id, .hash = stored_hash, .changed = false };
+            try self.execute("UPDATE files SET source_sha256=?1 WHERE id=?2;", .{ hash, id });
+            return .{ .id = id, .hash = hash, .changed = true };
+        }
+        const id = try self.addFile(commit, path, hash);
+        return .{ .id = id, .hash = hash, .changed = true };
+    }
+
     pub fn addSnapshot(self: *Database, name: []const u8, manifest: []const u8) !i64 {
         return self.insert("INSERT INTO corpus_snapshots(name,manifest_sha256) VALUES(?1,?2);", .{ name, manifest });
     }
+    pub fn snapshotId(self: *Database, name: []const u8, manifest: []const u8) !i64 {
+        if (try self.oneOrNull("SELECT id FROM corpus_snapshots WHERE name=?1;", .{name})) |id| {
+            const stored = try self.string("SELECT manifest_sha256 FROM corpus_snapshots WHERE id=?1;", .{id});
+            defer self.allocator.free(stored);
+            if (!std.mem.eql(u8, stored, manifest)) {
+                try self.execute("UPDATE corpus_snapshots SET manifest_sha256=?1 WHERE id=?2;", .{ manifest, id });
+            }
+            return id;
+        }
+        return self.addSnapshot(name, manifest);
+    }
     pub fn addConstruct(self: *Database, name: []const u8) !i64 {
         return self.insert("INSERT INTO constructs(name) VALUES(?1);", .{name});
+    }
+    pub fn getOrAddConstruct(self: *Database, name: []const u8) !i64 {
+        if (try self.oneOrNull("SELECT id FROM constructs WHERE name=?1;", .{name})) |id| return id;
+        return self.addConstruct(name);
     }
     pub fn addTopic(self: *Database, key: []const u8, label: []const u8) !i64 {
         return self.insert("INSERT INTO topics(key,label) VALUES(?1,?2);", .{ key, label });
@@ -107,6 +151,54 @@ pub const Database = struct {
         committed = true;
         return run_id;
     }
+
+    /// Atomically replaces stale observations, removes observations for deleted
+    /// files, and commits the run. Interruptions before COMMIT leave prior facts
+    /// untouched because all writes happen inside one transaction.
+    pub fn persistIncremental(self: *Database, run_value: Run, current_file_ids: []const i64, reanalyzed_file_ids: []const i64, observations: []const Observation) !i64 {
+        try self.exec("BEGIN IMMEDIATE;");
+        var committed = false;
+        defer if (!committed) self.exec("ROLLBACK;") catch {};
+
+        try self.failStaleRuns(run_value.commit_id, "superseded by newer run");
+        const run_id = try self.beginRun(run_value);
+
+        for (reanalyzed_file_ids) |file_id| {
+            try self.deleteObservationsForFile(file_id);
+        }
+
+        // Remove observations for files that no longer exist in this commit.
+        const all_file_ids = try self.fileIdsForCommit(run_value.commit_id);
+        defer self.allocator.free(all_file_ids);
+        for (all_file_ids) |file_id| {
+            if (std.mem.indexOfScalar(i64, current_file_ids, file_id) == null) {
+                try self.deleteObservationsForFile(file_id);
+            }
+        }
+
+        for (observations) |value| _ = try self.addObservation(run_id, value);
+        try self.finishRun(run_id, .completed, null);
+        try self.exec("COMMIT;");
+        committed = true;
+        return run_id;
+    }
+
+    fn fileIdsForCommit(self: *Database, commit_id: i64) ![]i64 {
+        const sql = "SELECT id FROM files WHERE commit_id=?1;";
+        const statement = try self.prepare(sql);
+        defer _ = sqlite3_finalize(statement);
+        try bindAll(statement, .{commit_id});
+        var list = std.ArrayList(i64).empty;
+        errdefer list.deinit(self.allocator);
+        while (true) {
+            const rc = sqlite3_step(statement);
+            if (rc == done) break;
+            if (rc != row) return error.Sqlite;
+            try list.append(self.allocator, sqlite3_column_int64(statement, 0));
+        }
+        return try list.toOwnedSlice(self.allocator);
+    }
+
     pub fn beginRun(self: *Database, value: Run) !i64 {
         return self.insert("INSERT INTO analysis_runs(repository_id,commit_id,snapshot_id,status,rgp_version,prism_version,classifier_version,taxonomy_version) VALUES(?1,?2,?3,'running',?4,?5,?6,?7);", .{ value.repository_id, value.commit_id, value.snapshot_id, value.rgp_version, value.prism_version, value.classifier_version, value.taxonomy_version });
     }
@@ -121,6 +213,34 @@ pub const Database = struct {
     }
     pub fn runStatus(self: *Database, id: i64) !i64 {
         return self.one("SELECT CASE status WHEN 'running' THEN 0 WHEN 'completed' THEN 1 WHEN 'failed' THEN 2 END FROM analysis_runs WHERE id=?1;", .{id});
+    }
+
+    /// Returns true when there exists any completed run for this commit with
+    /// the supplied analyzer-version signature that already contains
+    /// observations for the file. This lets skipped files remain valid even when
+    /// a newer run materialized no observations of its own.
+    pub fn fileIsCached(self: *Database, file_id: i64, versions: Run) !bool {
+        return (try self.oneOrNull(
+            "SELECT 1 FROM observations o " ++
+                "JOIN analysis_runs r ON o.analysis_run_id = r.id " ++
+                "WHERE o.file_id=?1 AND r.commit_id=?2 AND r.status='completed' " ++
+                "AND r.rgp_version=?3 AND r.prism_version=?4 AND r.classifier_version=?5 AND r.taxonomy_version=?6 " ++
+                "LIMIT 1;",
+            .{ file_id, versions.commit_id, versions.rgp_version, versions.prism_version, versions.classifier_version, versions.taxonomy_version },
+        )) != null;
+    }
+
+    /// Removes observations for a specific file across all runs. Used when a
+    /// file's content or analyzer version has changed and old observations must
+    /// be replaced atomically within the run transaction.
+    pub fn deleteObservationsForFile(self: *Database, file_id: i64) !void {
+        try self.execute("DELETE FROM observations WHERE file_id=?1;", .{file_id});
+    }
+
+    /// Marks any still-running analysis for a commit as failed so retries do
+    /// not mistake them for valid completed snapshots.
+    pub fn failStaleRuns(self: *Database, commit_id: i64, message: []const u8) !void {
+        try self.execute("UPDATE analysis_runs SET status='failed',failure=?1,finished_at=unixepoch() WHERE commit_id=?2 AND status='running';", .{ message, commit_id });
     }
 
     fn exec(self: *Database, sql: [:0]const u8) !void {
@@ -147,6 +267,24 @@ pub const Database = struct {
         try bindAll(statement, values);
         if (sqlite3_step(statement) != row) return error.Sqlite;
         return sqlite3_column_int64(statement, 0);
+    }
+    fn oneOrNull(self: *Database, sql: [:0]const u8, values: anytype) !?i64 {
+        const statement = try self.prepare(sql);
+        defer _ = sqlite3_finalize(statement);
+        try bindAll(statement, values);
+        const rc = sqlite3_step(statement);
+        if (rc == done) return null;
+        if (rc != row) return error.Sqlite;
+        return sqlite3_column_int64(statement, 0);
+    }
+    fn string(self: *Database, sql: [:0]const u8, values: anytype) ![]u8 {
+        const statement = try self.prepare(sql);
+        defer _ = sqlite3_finalize(statement);
+        try bindAll(statement, values);
+        if (sqlite3_step(statement) != row) return error.Sqlite;
+        const ptr = sqlite3_column_text(statement, 0) orelse return error.Sqlite;
+        const len = sqlite3_column_bytes(statement, 0);
+        return try self.allocator.dupe(u8, ptr[0..@intCast(len)]);
     }
 };
 fn bindAll(statement: *Stmt, values: anytype) !void {

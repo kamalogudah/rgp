@@ -14,6 +14,8 @@ pub const prism = @import("prism/parser.zig");
 /// Versioned, provenance-preserving SQLite persistence for analyzer facts.
 pub const storage = @import("storage/sqlite.zig");
 pub const repository = @import("repository/discovery.zig");
+/// Incremental analysis pipeline and observation extraction.
+pub const analysis = @import("analysis/root.zig");
 /// Corpus manifest and snapshot materialization.
 pub const corpus = @import("corpus/root.zig");
 /// CLI command adapters.
@@ -23,6 +25,7 @@ pub const cli = @import("cli/root.zig");
 // tests are compiled and exercised by the deterministic test build.
 test {
     std.testing.refAllDecls(repository);
+    std.testing.refAllDecls(analysis);
 }
 
 pub const version = "0.1.0-dev";
