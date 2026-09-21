@@ -35,5 +35,8 @@ jobs:
       - name: Build
         run: zig build
 
+      - name: Run pinned corpus regression gate
+        run: bash fixtures/corpus/regression_gate.sh
+
       - name: Test
         run: zig build test

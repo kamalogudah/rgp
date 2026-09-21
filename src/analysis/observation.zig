@@ -183,8 +183,8 @@ fn blockSyntax(opening_loc: c.c.pm_location_t, source: []const u8) ?[]const u8 {
     return null;
 }
 
-fn receiverKind(receiver: ?*const c.c.pm_node_t, source: []const u8) ?[]const u8 {
-    const raw = receiver orelse return null;
+fn receiverKind(receiver: ?*const c.c.pm_node_t, source: []const u8) []const u8 {
+    const raw = receiver orelse return "unknown";
     const node = parser.Node{ .raw = raw, .source_bytes = source };
     const kind = node.kind();
     if (std.mem.eql(u8, kind, "PM_INTEGER_NODE")) return "integer";
@@ -194,7 +194,7 @@ fn receiverKind(receiver: ?*const c.c.pm_node_t, source: []const u8) ?[]const u8
     if (std.mem.eql(u8, kind, "PM_LOCAL_VARIABLE_READ_NODE")) return "local_variable";
     if (std.mem.eql(u8, kind, "PM_INSTANCE_VARIABLE_READ_NODE")) return "instance_variable";
     if (std.mem.eql(u8, kind, "PM_CALL_NODE")) return "call";
-    return "other";
+    return "unknown";
 }
 
 fn sourceSlice(source: []const u8, location: c.c.pm_location_t) []const u8 {
@@ -259,6 +259,20 @@ test "tracks receiver kind for collection methods" {
     }
     try std.testing.expectEqualStrings("array", each_receiver.?);
     try std.testing.expectEqualStrings("local_variable", times_receiver.?);
+}
+
+test "receiver inference preserves unknown for an unqualified call" {
+    var document = try parser.parse(std.testing.allocator, "each {}\n", .{});
+    defer document.deinit();
+    const observations = try extract(std.testing.allocator, &document);
+    defer std.testing.allocator.free(observations);
+    for (observations) |obs| {
+        if (std.mem.eql(u8, obs.construct, "each")) {
+            try std.testing.expectEqualStrings("unknown", obs.receiver_kind.?);
+            return;
+        }
+    }
+    return error.MissingConstruct;
 }
 
 test "construct catalog fixture yields exact counts" {

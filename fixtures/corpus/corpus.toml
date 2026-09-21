@@ -1,0 +1,16 @@
+# Contract: docs/configuration.md#corpus-toml
+schema_version = 1
+
+[corpus]
+# This is a purely local, offline regression corpus. It does not fetch any
+# remote repository, so CI can run the analyzer release gate without network
+# access or moving branches.
+offline = true
+
+[[repository]]
+id = "rgp-first-analyzer"
+source = "."
+revision = "0000000000000000000000000000000000000000"
+category = "fixture"
+include = ["first_analyzer.rb"]
+exclude = []

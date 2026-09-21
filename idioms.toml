@@ -1,5 +1,6 @@
 # Contract: docs/configuration.md#idioms-toml
 schema_version = 1
+rule_version = "1"
 
 [[idiom]]
 id = "manual_collection_transformation"

@@ -4,6 +4,7 @@ const Io = std.Io;
 
 const discovery = @import("../repository/discovery.zig");
 const prism = @import("../prism/parser.zig");
+const idioms = @import("idioms.zig");
 const observation = @import("observation.zig");
 const storage = @import("../storage/sqlite.zig");
 
@@ -115,6 +116,8 @@ pub fn analyze(allocator: std.mem.Allocator, io: Io, db: *storage.Database, targ
     defer reanalyzed_file_ids.deinit(allocator);
 
     var observations = std.ArrayList(storage.Observation).empty;
+    var idiom_matches = std.ArrayList(storage.IdiomMatch).empty;
+    defer idiom_matches.deinit(allocator);
     defer {
         for (observations.items) |*obs| {
             allocator.free(obs.raw_json);
@@ -163,11 +166,11 @@ pub fn analyze(allocator: std.mem.Allocator, io: Io, db: *storage.Database, targ
         }
 
         try reanalyzed_file_ids.append(allocator, file_record.id);
-        const file_result = try analyzeFile(allocator, db, source, file.path, repo_id, commit_id, file_record.id, &observations);
+        const file_result = try analyzeFile(allocator, db, source, file.path, repo_id, commit_id, file_record.id, &observations, &idiom_matches);
         try file_results.append(allocator, file_result);
     }
 
-    const run_id = db.persistIncremental(run_value, current_file_ids.items, reanalyzed_file_ids.items, observations.items) catch |err| {
+    const run_id = db.persistIncrementalWithIdioms(run_value, current_file_ids.items, reanalyzed_file_ids.items, observations.items, idiom_matches.items) catch |err| {
         const result = RunResult{
             .run_id = 0,
             .status = .failed,
@@ -216,7 +219,7 @@ fn filesFailedBeforePersist(results: []const FileResult) bool {
     return false;
 }
 
-fn analyzeFile(allocator: std.mem.Allocator, db: *storage.Database, source: []const u8, path: []const u8, repository_id: i64, commit_id: i64, file_id: i64, observations: *std.ArrayList(storage.Observation)) Error!FileResult {
+fn analyzeFile(allocator: std.mem.Allocator, db: *storage.Database, source: []const u8, path: []const u8, repository_id: i64, commit_id: i64, file_id: i64, observations: *std.ArrayList(storage.Observation), idiom_matches: *std.ArrayList(storage.IdiomMatch)) Error!FileResult {
     var document = prism.parse(allocator, source, .{ .path = path }) catch |err| {
         const message = try std.fmt.allocPrint(allocator, "cannot parse `{s}`: {s}", .{ path, @errorName(err) });
         return .{ .path = try allocator.dupe(u8, path), .status = .failed, .observations = 0, .message = message };
@@ -234,6 +237,7 @@ fn analyzeFile(allocator: std.mem.Allocator, db: *storage.Database, source: []co
     };
     defer allocator.free(extracted);
 
+    const observation_offset = observations.items.len;
     for (extracted) |obs| {
         const raw_json = try obs.json(allocator);
         errdefer allocator.free(raw_json);
@@ -256,6 +260,17 @@ fn analyzeFile(allocator: std.mem.Allocator, db: *storage.Database, source: []co
             .block_syntax = obs.block_syntax,
         });
     }
+
+    const found = try idioms.detect(allocator, extracted);
+    defer allocator.free(found);
+    for (found) |match| try idiom_matches.append(allocator, .{
+        .observation_index = observation_offset + match.observation_index,
+        .idiom_id = match.idiom_id,
+        .reason = match.reason,
+        .confidence = match.confidence,
+        .classification = @tagName(match.classification),
+        .rule_version = idioms.rule_version,
+    });
 
     return .{ .path = try allocator.dupe(u8, path), .status = .analyzed, .observations = extracted.len };
 }

@@ -20,7 +20,7 @@ const ok = 0;
 const row = 100;
 const done = 101;
 const transient: ?*const anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
-pub const latest_schema_version = 3;
+pub const latest_schema_version = 4;
 
 pub const Run = struct {
     repository_id: i64,
@@ -46,6 +46,15 @@ pub const Observation = struct {
     name: ?[]const u8 = null,
     receiver_kind: ?[]const u8 = null,
     block_syntax: ?[]const u8 = null,
+};
+
+pub const IdiomMatch = struct {
+    observation_index: usize,
+    idiom_id: []const u8,
+    reason: []const u8,
+    confidence: []const u8,
+    classification: []const u8,
+    rule_version: []const u8,
 };
 
 pub const StatisticsQuery = struct {
@@ -160,6 +169,7 @@ pub const Database = struct {
         if (current < 1) try self.exec("BEGIN IMMEDIATE;" ++ migration_1 ++ "INSERT INTO schema_migrations VALUES(1);COMMIT;");
         if (current < 2) try self.exec("BEGIN IMMEDIATE;" ++ migration_2 ++ "INSERT INTO schema_migrations VALUES(2);COMMIT;");
         if (current < 3) try self.exec("BEGIN IMMEDIATE;" ++ migration_3 ++ "INSERT INTO schema_migrations VALUES(3);COMMIT;");
+        if (current < 4) try self.exec("BEGIN IMMEDIATE;" ++ migration_4 ++ "INSERT INTO schema_migrations VALUES(4);COMMIT;");
     }
     pub fn schemaVersion(self: *Database) !i64 {
         return self.one("SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", .{});
@@ -252,6 +262,10 @@ pub const Database = struct {
     /// files, and commits the run. Interruptions before COMMIT leave prior facts
     /// untouched because all writes happen inside one transaction.
     pub fn persistIncremental(self: *Database, run_value: Run, current_file_ids: []const i64, reanalyzed_file_ids: []const i64, observations: []const Observation) !i64 {
+        return self.persistIncrementalWithIdioms(run_value, current_file_ids, reanalyzed_file_ids, observations, .{});
+    }
+
+    pub fn persistIncrementalWithIdioms(self: *Database, run_value: Run, current_file_ids: []const i64, reanalyzed_file_ids: []const i64, observations: []const Observation, idiom_matches: []const IdiomMatch) !i64 {
         try self.exec("BEGIN IMMEDIATE;");
         var committed = false;
         defer if (!committed) self.exec("ROLLBACK;") catch {};
@@ -272,7 +286,13 @@ pub const Database = struct {
             }
         }
 
-        for (observations) |value| _ = try self.addObservation(run_id, value);
+        var observation_ids = std.ArrayList(i64).empty;
+        defer observation_ids.deinit(self.allocator);
+        for (observations) |value| try observation_ids.append(self.allocator, try self.addObservation(run_id, value));
+        for (idiom_matches) |match| {
+            if (match.observation_index >= observation_ids.items.len) return error.Sqlite;
+            _ = try self.addIdiomMatch(observation_ids.items[match.observation_index], match);
+        }
         try self.finishRun(run_id, .completed, null);
         try self.exec("COMMIT;");
         committed = true;
@@ -306,6 +326,14 @@ pub const Database = struct {
     pub fn addObservation(self: *Database, run_id: i64, value: Observation) !i64 {
         return self.insert("INSERT INTO observations(analysis_run_id,repository_id,commit_id,file_id,start_offset,end_offset,line,column,node_kind,raw_json,construct_id,topic_id,name,receiver_kind,block_syntax) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15);", .{ run_id, value.repository_id, value.commit_id, value.file_id, value.start_offset, value.end_offset, value.line, value.column, value.node_kind, value.raw_json, value.construct_id, value.topic_id, value.name, value.receiver_kind, value.block_syntax });
     }
+    pub fn getOrAddIdiom(self: *Database, name: []const u8, rule_version: []const u8) !i64 {
+        if (try self.oneOrNull("SELECT id FROM idioms WHERE name=?1 AND rule_version=?2;", .{ name, rule_version })) |id| return id;
+        return self.insert("INSERT INTO idioms(name,title,rule_version) VALUES(?1,?1,?2);", .{ name, rule_version });
+    }
+    pub fn addIdiomMatch(self: *Database, observation_id: i64, value: IdiomMatch) !i64 {
+        const idiom_id = try self.getOrAddIdiom(value.idiom_id, value.rule_version);
+        return self.insert("INSERT INTO observation_idioms(observation_id,idiom_id,reason,confidence,classification,rule_version) VALUES(?1,?2,?3,?4,?5,?6);", .{ observation_id, idiom_id, value.reason, value.confidence, value.classification, value.rule_version });
+    }
     pub fn count(self: *Database, comptime table: []const u8) !i64 {
         return self.one("SELECT COUNT(*) FROM " ++ table ++ ";", .{});
     }
@@ -332,6 +360,7 @@ pub const Database = struct {
     /// file's content or analyzer version has changed and old observations must
     /// be replaced atomically within the run transaction.
     pub fn deleteObservationsForFile(self: *Database, file_id: i64) !void {
+        try self.execute("DELETE FROM observation_idioms WHERE observation_id IN (SELECT id FROM observations WHERE file_id=?1);", .{file_id});
         try self.execute("DELETE FROM observations WHERE file_id=?1;", .{file_id});
     }
 
@@ -530,6 +559,7 @@ const migration_1 =
 
 const migration_2 = "ALTER TABLE observations ADD COLUMN block_syntax TEXT;";
 const migration_3 = "ALTER TABLE files ADD COLUMN classification TEXT NOT NULL DEFAULT 'production';";
+const migration_4 = "CREATE TABLE idioms(id INTEGER PRIMARY KEY,name TEXT NOT NULL,title TEXT NOT NULL,rule_version TEXT NOT NULL,UNIQUE(name,rule_version));" ++ "CREATE TABLE observation_idioms(observation_id INTEGER NOT NULL REFERENCES observations(id),idiom_id INTEGER NOT NULL REFERENCES idioms(id),reason TEXT NOT NULL,confidence TEXT NOT NULL,classification TEXT NOT NULL CHECK(classification IN('proven_equivalence', 'potential_alternative')),rule_version TEXT NOT NULL,PRIMARY KEY(observation_id,idiom_id,rule_version));" ++ "CREATE INDEX observation_idioms_idiom ON observation_idioms(idiom_id);";
 
 test "fresh migration stores versioned raw observations and provenance" {
     var db = try Database.open(std.testing.allocator, ":memory:");
