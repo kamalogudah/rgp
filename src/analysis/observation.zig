@@ -136,6 +136,11 @@ fn observationForNode(node: parser.Node) ?Observation {
         return null;
     }
 
+    if (std.mem.endsWith(u8, kind, "_WRITE_NODE")) {
+        const text = node.source_bytes[location.start_offset..location.end_offset];
+        if (std.mem.indexOf(u8, text, "||=") != null) return .{ .start_offset = base.start_offset, .end_offset = base.end_offset, .line = base.line, .column = base.column, .node_kind = base.node_kind, .construct = "memoization" };
+    }
+
     if (std.mem.eql(u8, kind, "PM_BLOCK_NODE")) {
         const block: *const c.c.pm_block_node_t = @ptrCast(node.raw);
         return .{
@@ -170,7 +175,7 @@ fn constructForKind(kind: []const u8) []const u8 {
 }
 
 fn trackedMethodName(name: []const u8) bool {
-    const names = [_][]const u8{ "each", "each_with_index", "each_with_object", "times", "map", "collect", "select", "filter", "reject", "reduce", "inject", "size", "length", "count" };
+    const names = [_][]const u8{ "each", "each_with_index", "each_with_object", "times", "map", "collect", "select", "filter", "reject", "reduce", "inject", "size", "length", "count", "new" };
     for (names) |n| if (std.mem.eql(u8, name, n)) return true;
     return false;
 }

@@ -1,8 +1,9 @@
 //! Conservative, versioned idiom classification over raw observations.
 const std = @import("std");
 const observation = @import("observation.zig");
+const parser = @import("../prism/parser.zig");
 
-pub const rule_version = "2";
+pub const rule_version = "3";
 pub const Classification = enum { proven_equivalence, potential_alternative };
 
 pub const Match = struct {
@@ -16,7 +17,9 @@ pub const Match = struct {
 /// Rules classify observations conservatively. Only literal array/integer
 /// receivers are considered proven; variables, calls, and absent receivers
 /// remain potential alternatives.
-pub fn detect(allocator: std.mem.Allocator, observations: []const observation.Observation) ![]Match { return detectObservations(allocator, observations); }
+pub fn detect(allocator: std.mem.Allocator, observations: []const observation.Observation) ![]Match {
+    return detectObservations(allocator, observations);
+}
 
 pub fn detectObservations(allocator: std.mem.Allocator, observations: []const observation.Observation) ![]Match {
     var matches = std.ArrayList(Match).empty;
@@ -61,7 +64,7 @@ pub fn detectObservations(allocator: std.mem.Allocator, observations: []const ob
     return try matches.toOwnedSlice(allocator);
 }
 
-/// Refine `each` classifications using the source span while retaining deterministic offsets.
+/// Refine observations with source-aware idiom classifications while retaining deterministic offsets.
 pub fn detectSource(allocator: std.mem.Allocator, source: []const u8, observations: []const observation.Observation) ![]Match {
     const base = try detectObservations(allocator, observations);
     defer allocator.free(base);
@@ -69,33 +72,59 @@ pub fn detectSource(allocator: std.mem.Allocator, source: []const u8, observatio
     errdefer result.deinit(allocator);
     for (base) |match| {
         const obs = observations[match.observation_index];
-        if (!std.mem.eql(u8, obs.construct, "each")) {
-            try result.append(allocator, match);
-            continue;
-        }
         const end = if (obs.end_offset < source.len) obs.end_offset else source.len;
         const text = if (obs.start_offset < end) source[obs.start_offset..end] else &.{};
         var refined = match;
-        if (containsAny(text, &.{ "<<", ".push", ".append", ".concat" })) {
-            refined.idiom_id = if (containsAny(text, &.{ " if ", " unless ", "next if", "next unless" })) "manual_filter" else "manual_collection_transformation";
-            refined.reason = if (std.mem.eql(u8, refined.idiom_id, "manual_filter")) "each mutates a result collection only on a predicate path" else "each mutates a result collection for each input element";
-            refined.confidence = "medium";
-        } else if (containsAny(text, &.{ "+=", "-=", "*=", "/=", "sum =", "total =", "count =" })) {
-            refined.idiom_id = "manual_accumulation";
-            refined.reason = "each updates an accumulator across iterations";
-            refined.confidence = "medium";
+        if (std.mem.eql(u8, obs.construct, "each")) {
+            if (containsAny(text, &.{ "<<", ".push", ".append", ".concat" })) {
+                refined.idiom_id = if (containsAny(text, &.{ " if ", " unless ", "next if", "next unless" })) "manual_filter" else "manual_collection_transformation";
+                refined.reason = if (std.mem.eql(u8, refined.idiom_id, "manual_filter")) "each mutates a result collection only on a predicate path" else "each mutates a result collection for each input element";
+                refined.confidence = "medium";
+            } else if (containsAny(text, &.{ "+=", "-=", "*=", "/=", "sum =", "total =", "count =" })) {
+                refined.idiom_id = "manual_accumulation";
+                refined.reason = "each updates an accumulator across iterations";
+                refined.confidence = "medium";
+            }
         }
+        if (std.mem.eql(u8, obs.construct, "if") or std.mem.eql(u8, obs.construct, "unless")) {
+            if (isPostfixConditional(text)) try result.append(allocator, .{ .observation_index = match.observation_index, .idiom_id = "postfix_conditional", .reason = "postfix if/unless keeps a short conditional action on one line", .confidence = "high", .classification = .proven_equivalence });
+            if (containsAny(text, &.{ "return ", "return\n", "next ", "break ", "raise " })) try result.append(allocator, .{ .observation_index = match.observation_index, .idiom_id = "conditional_guard", .reason = "early return/next/break/raise guards the remainder of the branch", .confidence = "medium", .classification = .potential_alternative });
+            if (containsAny(text, &.{ ".empty?", ".size == 0", ".length == 0", ".count == 0" })) try result.append(allocator, .{ .observation_index = match.observation_index, .idiom_id = "empty_check", .reason = "conditional tests collection emptiness; count and size are not interchangeable in general", .confidence = if (std.mem.indexOf(u8, text, "empty?") != null) "high" else "medium", .classification = .potential_alternative });
+            if (containsAny(text, &.{ ".nil?", " == nil", " != nil", " unless nil" })) try result.append(allocator, .{ .observation_index = match.observation_index, .idiom_id = "nil_guard", .reason = "conditional explicitly guards a nil value", .confidence = "high", .classification = .proven_equivalence });
+        }
+        if (std.mem.eql(u8, obs.construct, "new") and std.mem.startsWith(u8, std.mem.trim(u8, text, " \t\n"), "Hash.new")) try result.append(allocator, .{ .observation_index = match.observation_index, .idiom_id = "hash_default", .reason = "Hash.new supplies a default value or default block for missing keys", .confidence = "high", .classification = .proven_equivalence });
+        if (std.mem.eql(u8, obs.construct, "new")) continue;
+        if (std.mem.indexOf(u8, text, "&.") != null) try result.append(allocator, .{ .observation_index = match.observation_index, .idiom_id = "safe_navigation", .reason = "safe navigation skips the call when the receiver is nil", .confidence = "high", .classification = .proven_equivalence });
+        if (std.mem.indexOf(u8, text, "&:") != null) try result.append(allocator, .{ .observation_index = match.observation_index, .idiom_id = "symbol_to_proc", .reason = "&:symbol converts a method symbol into a block; block arity and side effects still matter", .confidence = "high", .classification = .potential_alternative });
+        if (std.mem.eql(u8, obs.construct, "def") and std.mem.indexOf(u8, text, "||=") != null) try result.append(allocator, .{ .observation_index = match.observation_index, .idiom_id = "memoization", .reason = "||= memoizes a method value, but falsey results do not remain cached", .confidence = "high", .classification = .potential_alternative });
         try result.append(allocator, refined);
+    }
+    // Source-only idioms may be attached to constructs that have no base rule.
+    for (observations, 0..) |obs, index| {
+        const end = if (obs.end_offset < source.len) obs.end_offset else source.len;
+        const text = if (obs.start_offset < end) source[obs.start_offset..end] else &.{};
+        if (std.mem.eql(u8, obs.construct, "if") or std.mem.eql(u8, obs.construct, "unless")) {
+            if (isPostfixConditional(text)) try result.append(allocator, .{ .observation_index = index, .idiom_id = "postfix_conditional", .reason = "postfix if/unless keeps a short conditional action on one line", .confidence = "high", .classification = .proven_equivalence });
+            if (containsAny(text, &.{ "return ", "return\n", "next ", "break ", "raise " })) try result.append(allocator, .{ .observation_index = index, .idiom_id = "conditional_guard", .reason = "early return/next/break/raise guards the remainder of the branch", .confidence = "medium", .classification = .potential_alternative });
+            if (containsAny(text, &.{ ".empty?", ".size == 0", ".length == 0", ".count == 0" })) try result.append(allocator, .{ .observation_index = index, .idiom_id = "empty_check", .reason = "conditional tests collection emptiness; count and size are not interchangeable in general", .confidence = "high", .classification = .potential_alternative });
+            if (containsAny(text, &.{ ".nil?", " == nil", " != nil", " unless nil" })) try result.append(allocator, .{ .observation_index = index, .idiom_id = "nil_guard", .reason = "conditional explicitly guards a nil value", .confidence = "high", .classification = .proven_equivalence });
+        }
+        if (std.mem.eql(u8, obs.construct, "new") and std.mem.startsWith(u8, std.mem.trim(u8, text, " \t\n"), "Hash.new")) try result.append(allocator, .{ .observation_index = index, .idiom_id = "hash_default", .reason = "Hash.new supplies a default value or default block for missing keys", .confidence = "high", .classification = .proven_equivalence });
+        if (std.mem.eql(u8, obs.construct, "def") and std.mem.indexOf(u8, text, "||=") != null) try result.append(allocator, .{ .observation_index = index, .idiom_id = "memoization", .reason = "||= memoizes a method value, but falsey results do not remain cached", .confidence = "high", .classification = .potential_alternative });
+        if (std.mem.indexOf(u8, text, "&.") != null) try result.append(allocator, .{ .observation_index = index, .idiom_id = "safe_navigation", .reason = "safe navigation skips the call when the receiver is nil", .confidence = "high", .classification = .proven_equivalence });
     }
     for (observations, 0..) |obs, index| {
         if (!std.mem.eql(u8, obs.construct, "for")) continue;
         const end = if (obs.end_offset < source.len) obs.end_offset else source.len;
         const text = if (obs.start_offset < end) source[obs.start_offset..end] else &.{};
-        if (containsAny(text, &.{ " in 0..", " in 1..", " in 0...", " in 1..." })) {
-            try result.append(allocator, .{ .observation_index = index, .idiom_id = "fixed_iteration", .reason = "for loop iterates over a literal-start counter range", .confidence = "medium", .classification = .potential_alternative });
-        }
+        if (containsAny(text, &.{ " in 0..", " in 1..", " in 0...", " in 1..." })) try result.append(allocator, .{ .observation_index = index, .idiom_id = "fixed_iteration", .reason = "for loop iterates over a literal-start counter range", .confidence = "medium", .classification = .potential_alternative });
     }
     return try result.toOwnedSlice(allocator);
+}
+
+fn isPostfixConditional(text: []const u8) bool {
+    const trimmed = std.mem.trim(u8, text, " \t\r\n");
+    return std.mem.indexOf(u8, trimmed, " if ") != null or std.mem.indexOf(u8, trimmed, " unless ") != null;
 }
 
 fn containsAny(haystack: []const u8, needles: []const []const u8) bool {
@@ -112,9 +141,8 @@ test "idiom rules preserve conservative unknown context" {
     try std.testing.expectEqual(@as(usize, 2), matches.len);
     try std.testing.expectEqual(.potential_alternative, matches[0].classification);
     try std.testing.expectEqual(.proven_equivalence, matches[1].classification);
-    try std.testing.expectEqualStrings("2", rule_version);
+    try std.testing.expectEqualStrings("3", rule_version);
 }
-
 
 test "source-aware manual loop classification" {
     const source = "xs.each { |x| out << x if x > 0 }\n";
@@ -122,4 +150,37 @@ test "source-aware manual loop classification" {
     const matches = try detectSource(std.testing.allocator, source, &observations);
     defer std.testing.allocator.free(matches);
     try std.testing.expectEqualStrings("manual_filter", matches[0].idiom_id);
+}
+
+test "phase 4 idioms cover positive and semantic-negative fixtures" {
+    const source = "def value\n  @value ||= compute\nend\n" ++
+        "items.each { |item| out << item if item }\n" ++
+        "if record.nil?\n  return nil\nend\n" ++
+        "items.map(&:name)\n" ++
+        "user&.size\n" ++
+        "if items.count == 0\n  return []\nend\n" ++
+        "cache = Hash.new { |h, k| h[k] = [] }\n";
+    var document = try parser.parse(std.testing.allocator, source, .{});
+    defer document.deinit();
+    const observations = try observation.extract(std.testing.allocator, &document);
+    defer std.testing.allocator.free(observations);
+    const matches = try detectSource(std.testing.allocator, source, observations);
+    defer std.testing.allocator.free(matches);
+    var found = std.StringHashMap(void).init(std.testing.allocator);
+    defer found.deinit();
+    for (matches) |match| {
+        try found.put(match.idiom_id, {});
+        try std.testing.expect(match.observation_index < observations.len);
+        try std.testing.expect(observations[match.observation_index].start_offset <= observations[match.observation_index].end_offset);
+    }
+    inline for ([_][]const u8{ "memoization", "manual_filter", "nil_guard", "symbol_to_proc", "safe_navigation", "hash_default", "empty_check" }) |id| try std.testing.expect(found.contains(id));
+    for (matches) |match| if (std.mem.eql(u8, match.idiom_id, "symbol_to_proc")) try std.testing.expectEqual(Classification.potential_alternative, match.classification);
+    for (matches) |match| if (std.mem.eql(u8, match.idiom_id, "empty_check")) {
+        try std.testing.expectEqual(Classification.potential_alternative, match.classification);
+        try std.testing.expect(std.mem.indexOf(u8, match.reason, "not interchangeable") != null);
+    };
+    for (matches) |match| if (std.mem.eql(u8, match.idiom_id, "memoization")) {
+        try std.testing.expectEqual(Classification.potential_alternative, match.classification);
+        try std.testing.expect(std.mem.indexOf(u8, match.reason, "falsey") != null);
+    };
 }
