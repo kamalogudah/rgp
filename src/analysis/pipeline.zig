@@ -261,7 +261,7 @@ fn analyzeFile(allocator: std.mem.Allocator, db: *storage.Database, source: []co
         });
     }
 
-    const found = try idioms.detect(allocator, extracted);
+    const found = try idioms.detectSource(allocator, source, extracted);
     defer allocator.free(found);
     for (found) |match| try idiom_matches.append(allocator, .{
         .observation_index = observation_offset + match.observation_index,

@@ -170,7 +170,7 @@ fn constructForKind(kind: []const u8) []const u8 {
 }
 
 fn trackedMethodName(name: []const u8) bool {
-    const names = [_][]const u8{ "each", "times", "map", "collect", "select", "filter", "reject", "reduce", "inject", "size", "length", "count" };
+    const names = [_][]const u8{ "each", "each_with_index", "each_with_object", "times", "map", "collect", "select", "filter", "reject", "reduce", "inject", "size", "length", "count" };
     for (names) |n| if (std.mem.eql(u8, name, n)) return true;
     return false;
 }
