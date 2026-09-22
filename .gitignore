@@ -1,3 +1,4 @@
-/.zig-cache/
-/zig-out/
-/.rgp/
+dist/
+.rgp/
+.zig-cache/
+zig-out/

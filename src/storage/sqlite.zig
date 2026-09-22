@@ -31,8 +31,15 @@ pub const EvidenceDimension = enum { exposure, practice, demonstrated };
 pub const Learner = struct { id: i64, external_id: []u8, display_name: []u8, profile: LearnerProfile };
 pub const LessonProgress = struct { learner_id: i64, lesson_id: i64, status: []const u8, position: i64 = 0 };
 pub const CompetencyEvidence = struct {
-    learner_id: i64, competency_id: i64, evidence_key: []const u8, dimension: EvidenceDimension, level: u8,
-    source_type: []const u8, source_id: []const u8, detail: []const u8, attributed_to: []const u8,
+    learner_id: i64,
+    competency_id: i64,
+    evidence_key: []const u8,
+    dimension: EvidenceDimension,
+    level: u8,
+    source_type: []const u8,
+    source_id: []const u8,
+    detail: []const u8,
+    attributed_to: []const u8,
 };
 
 pub const Run = struct {
@@ -747,8 +754,20 @@ fn bind(statement: *Stmt, index: c_int, value: anytype) !void {
     };
     if (rc != ok) return error.Sqlite;
 }
-fn profileText(value: LearnerProfile) []const u8 { return switch (value) { .beginner => "beginner", .intermediate => "intermediate", .senior => "senior" }; }
-fn dimensionText(value: EvidenceDimension) []const u8 { return switch (value) { .exposure => "exposure", .practice => "practice", .demonstrated => "demonstrated" }; }
+fn profileText(value: LearnerProfile) []const u8 {
+    return switch (value) {
+        .beginner => "beginner",
+        .intermediate => "intermediate",
+        .senior => "senior",
+    };
+}
+fn dimensionText(value: EvidenceDimension) []const u8 {
+    return switch (value) {
+        .exposure => "exposure",
+        .practice => "practice",
+        .demonstrated => "demonstrated",
+    };
+}
 const migration_1 =
     "CREATE TABLE repositories(id INTEGER PRIMARY KEY,origin TEXT NOT NULL UNIQUE);" ++
     "CREATE TABLE commits(id INTEGER PRIMARY KEY,repository_id INTEGER NOT NULL REFERENCES repositories(id),sha TEXT NOT NULL,UNIQUE(repository_id,sha));" ++

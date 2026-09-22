@@ -104,7 +104,11 @@ pub const Examples = struct {
     construct: []u8,
     items: []storage.SourceObservation,
     filter: Filter,
-    pub fn deinit(self: *Examples, allocator: std.mem.Allocator) void { allocator.free(self.construct); for (self.items) |*item| item.deinit(allocator); allocator.free(self.items); }
+    pub fn deinit(self: *Examples, allocator: std.mem.Allocator) void {
+        allocator.free(self.construct);
+        for (self.items) |*item| item.deinit(allocator);
+        allocator.free(self.items);
+    }
 };
 
 pub fn findExamples(allocator: std.mem.Allocator, db: *storage.Database, construct: []const u8, filter: Filter, limit: usize) Error!Examples {
@@ -120,16 +124,21 @@ pub const raw_syntax_note = "These figures are raw syntax frequencies from the c
 
 pub fn renderExamples(allocator: std.mem.Allocator, writer: anytype, examples: Examples, options: RenderOptions) !void {
     if (options.json) {
-        var output = std.Io.Writer.Allocating.init(allocator); defer output.deinit();
+        var output = std.Io.Writer.Allocating.init(allocator);
+        defer output.deinit();
         try output.writer.print("{{\"construct\":\"{s}\",\"examples\":[", .{examples.construct});
-        for (examples.items, 0..) |item, i| { if (i > 0) try output.writer.writeByte(','); try output.writer.print("{{\"repository\":\"{s}\",\"commit\":\"{s}\",\"file\":\"{s}\",\"line\":{d},\"column\":{d},\"start_offset\":{d},\"end_offset\":{d}}}", .{item.repository_origin,item.commit_sha,item.file_path,item.line,item.column,item.start_offset,item.end_offset}); }
-        try output.writer.writeAll("]}\n"); try writer.writeAll(output.written());
+        for (examples.items, 0..) |item, i| {
+            if (i > 0) try output.writer.writeByte(',');
+            try output.writer.print("{{\"repository\":\"{s}\",\"commit\":\"{s}\",\"file\":\"{s}\",\"line\":{d},\"column\":{d},\"start_offset\":{d},\"end_offset\":{d}}}", .{ item.repository_origin, item.commit_sha, item.file_path, item.line, item.column, item.start_offset, item.end_offset });
+        }
+        try output.writer.writeAll("]}\n");
+        try writer.writeAll(output.written());
     } else if (options.markdown) {
         try writer.print("# Examples: `{s}`\n\nRepository | Pinned commit | File | Source range\n---|---|---|---\n", .{examples.construct});
-        for (examples.items) |item| try writer.print("{s} | `{s}` | `{s}` | `{d}:{d} (offsets {d}..{d})\n", .{item.repository_origin,item.commit_sha,item.file_path,item.line,item.column,item.start_offset,item.end_offset});
+        for (examples.items) |item| try writer.print("{s} | `{s}` | `{s}` | `{d}:{d} (offsets {d}..{d})\n", .{ item.repository_origin, item.commit_sha, item.file_path, item.line, item.column, item.start_offset, item.end_offset });
     } else {
         try writer.print("Examples for `{s}`\n", .{examples.construct});
-        for (examples.items) |item| try writer.print("{s}@{s} {s}:{d}:{d} offsets={d}..{d}\n", .{item.repository_origin,item.commit_sha,item.file_path,item.line,item.column,item.start_offset,item.end_offset});
+        for (examples.items) |item| try writer.print("{s}@{s} {s}:{d}:{d} offsets={d}..{d}\n", .{ item.repository_origin, item.commit_sha, item.file_path, item.line, item.column, item.start_offset, item.end_offset });
         if (examples.items.len == 0) try writer.writeAll("No matching examples.\n");
     }
 }
@@ -158,12 +167,18 @@ pub fn renderTopic(allocator: std.mem.Allocator, writer: anytype, report: TopicR
 
 fn renderComparisonMarkdown(writer: anytype, comparison: Comparison) !void {
     try writer.print("# Construct comparison\n\n{s}\n\n", .{raw_syntax_note});
-    if (comparison.statistics.len == 0) { try writer.writeAll("No constructs requested.\n"); return; }
+    if (comparison.statistics.len == 0) {
+        try writer.writeAll("No constructs requested.\n");
+        return;
+    }
     const head = comparison.statistics[0];
     try writer.print("- Denominator: {d} observations\n- Filter: ", .{head.denominator});
     try renderFilter(writer, head.filters);
     try writer.writeAll("\n| Construct | Count | Frequency | Projects |\n|---|---:|---:|---:|\n");
-    for (comparison.statistics) |stat| { var pct: [32]u8 = undefined; try writer.print("| `{s}` | {d} | {s} | {d} |\n", .{stat.construct, stat.count, formatPercentage(&pct, stat.percentage), stat.projects.len}); }
+    for (comparison.statistics) |stat| {
+        var pct: [32]u8 = undefined;
+        try writer.print("| `{s}` | {d} | {s} | {d} |\n", .{ stat.construct, stat.count, formatPercentage(&pct, stat.percentage), stat.projects.len });
+    }
 }
 
 fn renderComparisonTerminal(writer: anytype, comparison: Comparison) !void {
@@ -203,12 +218,18 @@ fn renderComparisonTerminal(writer: anytype, comparison: Comparison) !void {
 
 fn renderTopicMarkdown(writer: anytype, report: TopicReport) !void {
     try writer.print("# {s}\n\n{s}\n\n", .{ report.title, raw_syntax_note });
-    if (report.statistics.len == 0) { try writer.writeAll("No constructs defined for this topic.\n"); return; }
+    if (report.statistics.len == 0) {
+        try writer.writeAll("No constructs defined for this topic.\n");
+        return;
+    }
     const head = report.statistics[0];
     try writer.print("- Denominator: {d} observations\n- Filter: ", .{head.denominator});
     try renderFilter(writer, head.filters);
     try writer.writeAll("\n| Construct | Count | Frequency | Projects |\n|---|---:|---:|---:|\n");
-    for (report.statistics) |stat| { var pct: [32]u8 = undefined; try writer.print("| `{s}` | {d} | {s} | {d} |\n", .{stat.construct, stat.count, formatPercentage(&pct, stat.percentage), stat.projects.len}); }
+    for (report.statistics) |stat| {
+        var pct: [32]u8 = undefined;
+        try writer.print("| `{s}` | {d} | {s} | {d} |\n", .{ stat.construct, stat.count, formatPercentage(&pct, stat.percentage), stat.projects.len });
+    }
     if (report.incomplete) try writer.writeAll("\n> Warning: at least one matching analysis run is incomplete.\n");
 }
 

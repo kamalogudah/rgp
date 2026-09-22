@@ -51,6 +51,20 @@ zig build run -- --version
 
 Use `zig fmt src build.zig` to apply formatting before committing.
 
+## Release validation and packaging
+
+The first offline Learning MVP has a repeatable release checklist, acceptance
+evidence, supported targets, dependency provenance, packaging instructions, and
+known limitations in [`docs/release.md`](docs/release.md). Run the complete
+offline validation with:
+
+```sh
+bash scripts/release-check.sh
+```
+
+Add `package` to create a native `dist/*.tar.gz` artifact and then record its
+SHA-256 checksum.
+
 ## CLI
 
 ```text

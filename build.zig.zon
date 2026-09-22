@@ -75,6 +75,7 @@
         "build.zig.zon",
         "README.md",
         "docs",
+        "scripts",
         ".zigversion",
         "corpus.toml",
         "taxonomy.toml",
