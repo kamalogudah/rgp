@@ -25,6 +25,7 @@ pub const Tool = enum {
     find_examples,
     get_lesson,
     get_exercise,
+    generate_exercise,
     submit_exercise,
     get_progress,
     record_progress,
@@ -49,6 +50,7 @@ pub const catalog = [_]ToolInfo{
     .{ .name = "rgp.find_examples" },
     .{ .name = "rgp.get_lesson" },
     .{ .name = "rgp.get_exercise" },
+    .{ .name = "rgp.generate_exercise" },
     .{ .name = "rgp.submit_exercise", .mutates_evidence = true },
     .{ .name = "rgp.get_progress" },
     .{ .name = "rgp.record_progress", .mutates_evidence = true },
@@ -250,6 +252,7 @@ pub const Gateway = struct {
                 defer document.deinit();
                 try traversal.writeJson(&document, writer);
             },
+            .generate_exercise => try self.generateExercise(object, writer),
             .get_lesson => {
                 const lesson = learning.find(stringField(object, "id") orelse return error.InvalidInput) orelse return error.NotFound;
                 try writer.print("{{\"id\":\"{s}\",\"title\":\"{s}\",\"concept\":\"{s}\",\"exercise\":\"{s}\"}}", .{ lesson.id, lesson.title, lesson.concept, lesson.exercise });
@@ -269,6 +272,14 @@ pub const Gateway = struct {
                 try writer.writeAll("{\"status\":\"accepted\",\"database\":true}");
             },
         }
+    }
+
+    fn generateExercise(self: *Gateway, object: std.json.ObjectMap, writer: anytype) !void {
+        _ = self;
+        const kind = stringField(object, "kind") orelse return error.InvalidInput;
+        if (!std.mem.eql(u8, kind, "map_names")) return error.InvalidInput;
+        const delivery = exercises.deliverGenerated(.{ .topic = stringField(object, "topic").?, .level = stringField(object, "level").? }, .{ .id = stringField(object, "id").?, .title = stringField(object, "title").?, .prompt = stringField(object, "prompt").?, .competency = stringField(object, "competency").?, .topic = stringField(object, "topic").?, .level = stringField(object, "level").?, .kind = .map_names, .expected_behavior = stringField(object, "expected_behavior").?, .provenance = stringField(object, "provenance").? });
+        try writer.print("{{\"id\":\"{s}\",\"title\":\"{s}\",\"prompt\":\"{s}\",\"expected_behavior\":\"{s}\",\"accepted\":{s},\"generation_status\":\"{s}\",\"provenance\":\"{s}\"}}", .{ delivery.exercise.id, delivery.exercise.title, delivery.exercise.prompt, delivery.exercise.expected_behavior, if (delivery.accepted) "true" else "false", delivery.exercise.generation_status, delivery.exercise.provenance });
     }
 
     fn submitExercise(self: *Gateway, object: std.json.ObjectMap, writer: anytype) !void {
@@ -343,6 +354,7 @@ fn validateInput(tool: Tool, object: std.json.ObjectMap) ?[]const u8 {
     const required: []const []const u8 = switch (tool) {
         .parse_file => &.{"source"},
         .get_lesson, .get_exercise, .get_construct, .get_idiom, .get_topic => &.{"id"},
+        .generate_exercise => &.{ "topic", "level", "id", "title", "prompt", "competency", "expected_behavior", "provenance", "kind" },
         .submit_exercise => &.{ "exercise_id", "learner_id", "source", "source_sha256" },
         .record_progress => &.{ "learner_id", "lesson_id", "status", "position" },
         .get_progress => &.{"learner_id"},
@@ -354,6 +366,7 @@ fn validateInput(tool: Tool, object: std.json.ObjectMap) ?[]const u8 {
     const string_required: []const []const u8 = switch (tool) {
         .parse_file => &.{"source"},
         .get_lesson, .get_exercise, .get_construct, .get_idiom, .get_topic => &.{"id"},
+        .generate_exercise => &.{ "topic", "level", "id", "title", "prompt", "competency", "expected_behavior", "provenance", "kind" },
         .submit_exercise => &.{ "exercise_id", "source", "source_sha256" },
         .record_progress => &.{ "lesson_id", "status" },
         .analyze_file => &.{ "path", "source" },
@@ -407,9 +420,9 @@ fn prefixedDigest(allocator: std.mem.Allocator, prefix: []const u8, first: []con
 }
 
 test "catalog is versioned and complete" {
-    try std.testing.expectEqual(@as(usize, 14), catalog.len);
+    try std.testing.expectEqual(@as(usize, 15), catalog.len);
     try std.testing.expectEqualStrings("rgp.parse_file", catalog[0].name);
-    try std.testing.expect(catalog[11].mutates_evidence);
+    try std.testing.expect(catalog[12].mutates_evidence);
 }
 
 test "gateway rejects unknown and malformed calls with stable ids" {
@@ -494,4 +507,14 @@ test "cancellation and exercise limits are enforced before execution" {
     defer cancelled.deinit(std.testing.allocator);
     try std.testing.expectEqual(ErrorCode.cancelled, cancelled.error_code.?);
     try std.testing.expectError(PolicyError.ExerciseLimitExceeded, gateway.authorize(.{ .exercise = .{ .source_bytes = 65 * 1024 } }));
+}
+
+test "generated exercise gateway rejects unsupported contracts and returns reviewed fallback" {
+    var gateway = Gateway.init(std.testing.allocator, null);
+    defer gateway.deinit();
+    var response = try gateway.dispatch(.{ .tool = "rgp.generate_exercise", .input = "{\"topic\":\"collections\",\"level\":\"beginner\",\"id\":\"bad\",\"title\":\"Do something\",\"prompt\":\"Maybe\",\"competency\":\"unknown\",\"expected_behavior\":\"maybe\",\"provenance\":\"provider:test\",\"kind\":\"map_names\"}" });
+    defer response.deinit(std.testing.allocator);
+    try std.testing.expect(response.ok);
+    try std.testing.expect(std.mem.indexOf(u8, response.output, "\"accepted\":false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.output, "reviewed-static") != null);
 }

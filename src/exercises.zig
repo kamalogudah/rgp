@@ -1,4 +1,4 @@
-//! Static exercises and deterministic submission validation.
+//! Reviewed static exercises plus constrained, deterministic generated tasks.
 const std = @import("std");
 const prism = @import("prism/parser.zig");
 const storage = @import("storage/sqlite.zig");
@@ -7,8 +7,23 @@ pub const ExerciseKind = enum { map_names };
 pub const RevealLevel = enum(u8) { hint, concept, partial_example, solution, evidence };
 pub const progression = [_][]const u8{ "Look at the required result: each input user contributes one output name. Which collection operation describes transforming every item?", "map (also called collect) returns a new collection by applying a block to every item; each is for side effects and needs explicit result storage.", "Try: names = users.map { |user| user.___ } — choose the member that supplies the requested value. A manual each solution is also valid, with explicit accumulation as its trade-off.", "users.map { |user| user.name }", "The offline validator records deterministic static shape and labels map/collect as idiomatic, explicit each accumulation as manual-correct, and alternatives only when behavior is established. Popularity never decides correctness." };
 pub const Outcome = enum { syntax_error, correct, alternative_correct, manual_correct, idiomatic_correct, wrong, runtime_unavailable };
-pub const Exercise = struct { id: []const u8, title: []const u8, prompt: []const u8, competency: []const u8, topic: []const u8 = "collections", level: []const u8 = "beginner", kind: ExerciseKind, guidance: []const []const u8 = &progression };
+pub const Exercise = struct { id: []const u8, title: []const u8, prompt: []const u8, competency: []const u8, topic: []const u8 = "collections", level: []const u8 = "beginner", kind: ExerciseKind, expected_behavior: []const u8 = "returns user.name for every user", provenance: []const u8 = "reviewed-static", generation_status: []const u8 = "reviewed", guidance: []const []const u8 = &progression };
 pub const exercises = [_]Exercise{.{ .id = "collections.map-names", .title = "Transform users into names", .prompt = "Return the names of all users using an Enumerable method.", .competency = "enumerable_transformation", .kind = .map_names }};
+
+pub const GenerationRequest = struct { topic: []const u8, level: []const u8 };
+pub const GeneratedCandidate = struct { id: []const u8, title: []const u8, prompt: []const u8, competency: []const u8, topic: []const u8, level: []const u8, kind: ExerciseKind, expected_behavior: []const u8, provenance: []const u8 };
+pub const Delivery = struct { exercise: Exercise, accepted: bool, rejection_reason: ?[]const u8 = null };
+
+/// Validate an agent proposal before it can reach a learner.
+pub fn deliverGenerated(request: GenerationRequest, candidate: GeneratedCandidate) Delivery {
+    const valid = request.topic.len != 0 and request.level.len != 0 and candidate.id.len != 0 and candidate.title.len != 0 and candidate.prompt.len != 0 and candidate.competency.len != 0 and candidate.provenance.len != 0 and std.mem.eql(u8, candidate.topic, request.topic) and std.mem.eql(u8, candidate.level, request.level) and candidate.kind == .map_names and std.mem.eql(u8, candidate.competency, "enumerable_transformation") and std.mem.eql(u8, candidate.expected_behavior, "returns user.name for every user") and !containsControl(candidate.prompt) and !containsControl(candidate.title);
+    if (valid) return .{ .accepted = true, .exercise = .{ .id = candidate.id, .title = candidate.title, .prompt = candidate.prompt, .competency = candidate.competency, .topic = candidate.topic, .level = candidate.level, .kind = candidate.kind, .expected_behavior = candidate.expected_behavior, .provenance = candidate.provenance, .generation_status = "accepted" } };
+    return .{ .accepted = false, .rejection_reason = "candidate is ambiguous, out of scope, or lacks a supported behavior contract", .exercise = exercises[0] };
+}
+fn containsControl(value: []const u8) bool {
+    for (value) |byte| if (byte < 0x20 and byte != '\n' and byte != '\t') return true;
+    return false;
+}
 pub const Result = struct {
     attempt_id: i64 = 0,
     outcome: Outcome,
@@ -32,6 +47,7 @@ pub fn find(id: []const u8) ?Exercise {
 pub fn submit(allocator: std.mem.Allocator, db: *storage.Database, learner_id: i64, exercise: Exercise, source: []const u8, source_sha256: []const u8) !Result {
     const result = try validate(allocator, exercise, source);
     const attempt_id = try db.recordExerciseAttemptAnalysis(learner_id, exercise.id, exercise.title, exercise.prompt, exercise.competency, source, @tagName(result.outcome), result.syntax_ok, result.behavioral_check, result.feedback, result.deterministic, source_sha256, result.idiom_id, result.idiom_evidence, if (result.idiom_id != null) "corpus examples for the recognized idiom are available via `rgp examples map`" else "no idiom corpus evidence claimed");
+    try db.recordExerciseProvenance(exercise.id, exercise.expected_behavior, exercise.provenance, exercise.generation_status);
     const competency = try db.getOrAddCompetency(exercise.competency, exercise.title);
     const level: u8 = switch (result.outcome) {
         .idiomatic_correct => 4,
@@ -115,4 +131,12 @@ test "reveal progression is learner-controlled and persisted per attempt" {
 test "wrong static submissions remain wrong" {
     const result = try validate(std.testing.allocator, exercises[0], "users.each { |user| puts user.email }");
     try std.testing.expectEqual(Outcome.wrong, result.outcome);
+}
+
+test "accepted generated submission keeps deterministic competency scoring" {
+    const delivery = deliverGenerated(.{ .topic = "collections", .level = "beginner" }, .{ .id = "generated.map-names.2", .title = "Name users", .prompt = "Return each user's name.", .competency = "enumerable_transformation", .topic = "collections", .level = "beginner", .kind = .map_names, .expected_behavior = "returns user.name for every user", .provenance = "provider:test;seed:2" });
+    try std.testing.expect(delivery.accepted);
+    const result = try validate(std.testing.allocator, delivery.exercise, "users.map { |user| user.name }");
+    try std.testing.expectEqual(Outcome.idiomatic_correct, result.outcome);
+    try std.testing.expect(result.deterministic);
 }

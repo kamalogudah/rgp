@@ -23,7 +23,7 @@ const ok = 0;
 const row = 100;
 const done = 101;
 const transient: ?*const anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
-pub const latest_schema_version = 11;
+pub const latest_schema_version = 12;
 
 pub const LearnerProfile = enum { beginner, intermediate, senior };
 pub const EvidenceDimension = enum { exposure, practice, demonstrated };
@@ -207,6 +207,7 @@ pub const Database = struct {
         if (current < 9) try self.exec("BEGIN IMMEDIATE;" ++ migration_9 ++ "INSERT INTO schema_migrations VALUES(9);COMMIT;");
         if (current < 10) try self.exec("BEGIN IMMEDIATE;" ++ migration_10 ++ "INSERT INTO schema_migrations VALUES(10);COMMIT;");
         if (current < 11) try self.exec("BEGIN IMMEDIATE;" ++ migration_11 ++ "INSERT INTO schema_migrations VALUES(11);COMMIT;");
+        if (current < 12) try self.exec("BEGIN IMMEDIATE;" ++ migration_12 ++ "INSERT INTO schema_migrations VALUES(12);COMMIT;");
     }
     pub fn schemaVersion(self: *Database) !i64 {
         return self.one("SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", .{});
@@ -443,6 +444,10 @@ pub const Database = struct {
         return id;
     }
 
+    pub fn recordExerciseProvenance(self: *Database, exercise_key: []const u8, expected_behavior: []const u8, provenance: []const u8, generation_status: []const u8) !void {
+        try self.execute("UPDATE exercises SET expected_behavior=?2,generation_provenance=?3,generation_status=?4 WHERE key=?1;", .{ exercise_key, expected_behavior, provenance, generation_status });
+    }
+
     pub fn recordExerciseAttempt(self: *Database, learner_id: i64, exercise_key: []const u8, title: []const u8, prompt: []const u8, competency_key: []const u8, source: []const u8, outcome: []const u8, syntax_ok: bool, behavioral_check: []const u8, feedback: []const u8, deterministic: bool, source_sha256: []const u8) !i64 {
         const exercise_id = if (try self.oneOrNull("SELECT id FROM exercises WHERE key=?1;", .{exercise_key})) |id| id else try self.insert("INSERT INTO exercises(key,title,prompt,competency_key) VALUES(?1,?2,?3,?4);", .{ exercise_key, title, prompt, competency_key });
         if (try self.oneOrNull("SELECT id FROM exercise_attempts WHERE learner_id=?1 AND exercise_id=?2 AND source_sha256=?3;", .{ learner_id, exercise_id, source_sha256 })) |id| return id;
@@ -465,11 +470,16 @@ pub const Database = struct {
     /// Read-only learner state used by deterministic recommendation logic.
     pub fn competencyStates(self: *Database, allocator: std.mem.Allocator, learner_id: i64) ![]CompetencyState {
         const sql: [:0]const u8 = "SELECT c.key,lc.exposure_level,lc.practice_level,lc.demonstrated_level FROM learner_competencies lc JOIN competencies c ON c.id=lc.competency_id WHERE lc.learner_id=?1 ORDER BY c.key;";
-        const zsql = try allocator.dupeZ(u8, sql); defer allocator.free(zsql);
-        const statement = try self.prepare(zsql); defer _ = sqlite3_finalize(statement);
+        const zsql = try allocator.dupeZ(u8, sql);
+        defer allocator.free(zsql);
+        const statement = try self.prepare(zsql);
+        defer _ = sqlite3_finalize(statement);
         try bindAll(statement, .{learner_id});
         var result = std.ArrayList(CompetencyState).empty;
-        errdefer { for (result.items) |state| allocator.free(state.key); result.deinit(allocator); }
+        errdefer {
+            for (result.items) |state| allocator.free(state.key);
+            result.deinit(allocator);
+        }
         while (true) {
             const rc = sqlite3_step(statement);
             if (rc == done) break;
@@ -481,11 +491,16 @@ pub const Database = struct {
 
     pub fn completedLessonKeys(self: *Database, allocator: std.mem.Allocator, learner_id: i64) ![][]u8 {
         const sql: [:0]const u8 = "SELECT l.key FROM lesson_progress p JOIN lessons l ON l.id=p.lesson_id WHERE p.learner_id=?1 AND p.status='completed' ORDER BY l.id;";
-        const zsql = try allocator.dupeZ(u8, sql); defer allocator.free(zsql);
-        const statement = try self.prepare(zsql); defer _ = sqlite3_finalize(statement);
+        const zsql = try allocator.dupeZ(u8, sql);
+        defer allocator.free(zsql);
+        const statement = try self.prepare(zsql);
+        defer _ = sqlite3_finalize(statement);
         try bindAll(statement, .{learner_id});
         var result = std.ArrayList([]u8).empty;
-        errdefer { for (result.items) |key| allocator.free(key); result.deinit(allocator); }
+        errdefer {
+            for (result.items) |key| allocator.free(key);
+            result.deinit(allocator);
+        }
         while (true) {
             const rc = sqlite3_step(statement);
             if (rc == done) break;
@@ -875,6 +890,7 @@ const migration_8 = "CREATE TABLE exercises(id INTEGER PRIMARY KEY,key TEXT NOT 
 const migration_9 = "ALTER TABLE exercise_attempts ADD COLUMN idiom_id TEXT;ALTER TABLE exercise_attempts ADD COLUMN idiom_evidence TEXT NOT NULL DEFAULT 'none';ALTER TABLE exercise_attempts ADD COLUMN corpus_evidence TEXT NOT NULL DEFAULT 'no corpus evidence claimed';";
 const migration_10 = "CREATE TABLE attempt_reveals(attempt_id INTEGER PRIMARY KEY REFERENCES exercise_attempts(id),level INTEGER NOT NULL CHECK(level BETWEEN 0 AND 4),updated_at INTEGER NOT NULL DEFAULT(unixepoch()));";
 const migration_11 = "CREATE TABLE agent_sessions(id INTEGER PRIMARY KEY,session_key TEXT NOT NULL UNIQUE,adapter TEXT NOT NULL,learner_id TEXT,topic TEXT,cwd TEXT,corpus_snapshot TEXT,status TEXT NOT NULL CHECK(status IN(\"active\",\"completed\",\"interrupted\")),generation INTEGER NOT NULL DEFAULT 0,started_at INTEGER NOT NULL DEFAULT(unixepoch()),resumed_at INTEGER);" ++ "CREATE TABLE agent_messages(id INTEGER PRIMARY KEY,session_id INTEGER NOT NULL REFERENCES agent_sessions(id),role TEXT NOT NULL CHECK(role IN(\"system\",\"user\",\"assistant\",\"tool\")),content TEXT NOT NULL,complete INTEGER NOT NULL CHECK(complete IN(0,1)),created_at INTEGER NOT NULL DEFAULT(unixepoch()));" ++ "CREATE TABLE agent_tool_calls(id INTEGER PRIMARY KEY,session_id INTEGER NOT NULL REFERENCES agent_sessions(id),tool TEXT NOT NULL,call_id TEXT NOT NULL,result_id TEXT,ok INTEGER NOT NULL,created_at INTEGER NOT NULL DEFAULT(unixepoch()));" ++ "CREATE INDEX agent_messages_lookup ON agent_messages(session_id,id);";
+const migration_12 = "ALTER TABLE exercises ADD COLUMN expected_behavior TEXT NOT NULL DEFAULT 'returns user.name for every user';ALTER TABLE exercises ADD COLUMN generation_provenance TEXT NOT NULL DEFAULT 'reviewed-static';ALTER TABLE exercises ADD COLUMN generation_status TEXT NOT NULL DEFAULT 'reviewed';";
 const migration_7 = "CREATE TABLE learners(id INTEGER PRIMARY KEY,external_id TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,profile TEXT NOT NULL CHECK(profile IN(\"beginner\",\"intermediate\",\"senior\")),created_at INTEGER NOT NULL DEFAULT(unixepoch()),updated_at INTEGER NOT NULL DEFAULT(unixepoch()));" ++
     "CREATE TABLE learning_sessions(id INTEGER PRIMARY KEY,learner_id INTEGER NOT NULL REFERENCES learners(id),session_key TEXT NOT NULL,started_at INTEGER NOT NULL DEFAULT(unixepoch()),resumed_at INTEGER,UNIQUE(learner_id,session_key));" ++
     "CREATE TABLE lessons(id INTEGER PRIMARY KEY,key TEXT NOT NULL UNIQUE,title TEXT NOT NULL);" ++
