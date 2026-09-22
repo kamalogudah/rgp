@@ -14,6 +14,7 @@ const usage =
     "  --version, -V          Show the RGP version\n" ++
     "  analyze [path | --corpus]  Analyze a repository or the whole corpus\n" ++
     "  compare <construct>...  Compare construct counts and percentages\n" ++
+    "  learn-repo <project>    Build a repository concept map and cohort comparison\n" ++
     "  report [topic]          Report on a taxonomy topic\n" ++
     "  examples <construct>     Retrieve cited source examples\n" ++
     "  learn [lesson]           Follow the offline Ruby fundamentals path\n  practice [topic]          List practice exercises by topic or level\n" ++
@@ -65,6 +66,9 @@ fn run(args: []const []const u8, writer: *Io.Writer, io: Io, allocator: std.mem.
     }
     if (args.len > 0 and std.mem.eql(u8, args[0], "compare")) {
         return rgp.cli.compare.run(io, allocator, args[1..], writer);
+    }
+    if (args.len > 0 and std.mem.eql(u8, args[0], "learn-repo")) {
+        return rgp.cli.learn_repo.run(io, allocator, args[1..], writer);
     }
     if (args.len > 0 and std.mem.eql(u8, args[0], "report")) {
         return rgp.cli.report.run(io, allocator, args[1..], writer);
