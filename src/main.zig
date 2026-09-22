@@ -17,7 +17,8 @@ const usage =
     "  report [topic]          Report on a taxonomy topic\n" ++
     "  examples <construct>     Retrieve cited source examples\n" ++
     "  learn [lesson]           Follow the offline Ruby fundamentals path\n  practice [topic]          List practice exercises by topic or level\n" ++
-    "  idioms <file>           Report conservative idiom matches\n" ++
+    "  idioms <file>           Report conservative idiom matches\n" ++ "  agent <list|use|status> Manage coding-agent adapters (fx is optional)\n" ++
+    "  ask [--agent name] <question> Ask through a selected coding agent\n" ++
     "  corpus                  Manage the analyzed corpus\n" ++
     "  parse <file>            Parse a Ruby file and emit JSON\n" ++
     "\n" ++
@@ -79,6 +80,12 @@ fn run(args: []const []const u8, writer: *Io.Writer, io: Io, allocator: std.mem.
     }
     if (args.len > 0 and std.mem.eql(u8, args[0], "idioms")) {
         return rgp.cli.idioms.run(io, allocator, args[1..], writer);
+    }
+    if (args.len > 0 and std.mem.eql(u8, args[0], "ask")) {
+        return rgp.cli.ask.run(io, allocator, args[1..], writer);
+    }
+    if (args.len > 0 and std.mem.eql(u8, args[0], "agent")) {
+        return rgp.cli.agent.run(io, allocator, args[1..], writer);
     }
     switch (try rgp.parseCommand(args)) {
         .help => try writer.writeAll(usage),

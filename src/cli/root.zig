@@ -9,6 +9,8 @@ pub const idioms = @import("idioms.zig");
 pub const examples = @import("examples.zig");
 pub const practice = @import("practice.zig");
 pub const learn = @import("learn.zig");
+pub const agent = @import("agent.zig");
+pub const ask = @import("ask.zig");
 
 test {
     std.testing.refAllDecls(corpus);
@@ -19,4 +21,6 @@ test {
     std.testing.refAllDecls(examples);
     std.testing.refAllDecls(learn);
     std.testing.refAllDecls(practice);
+    std.testing.refAllDecls(agent);
+    std.testing.refAllDecls(ask);
 }

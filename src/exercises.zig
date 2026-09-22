@@ -4,10 +4,13 @@ const prism = @import("prism/parser.zig");
 const storage = @import("storage/sqlite.zig");
 
 pub const ExerciseKind = enum { map_names };
+pub const RevealLevel = enum(u8) { hint, concept, partial_example, solution, evidence };
+pub const progression = [_][]const u8{ "Look at the required result: each input user contributes one output name. Which collection operation describes transforming every item?", "map (also called collect) returns a new collection by applying a block to every item; each is for side effects and needs explicit result storage.", "Try: names = users.map { |user| user.___ } — choose the member that supplies the requested value. A manual each solution is also valid, with explicit accumulation as its trade-off.", "users.map { |user| user.name }", "The offline validator records deterministic static shape and labels map/collect as idiomatic, explicit each accumulation as manual-correct, and alternatives only when behavior is established. Popularity never decides correctness." };
 pub const Outcome = enum { syntax_error, correct, alternative_correct, manual_correct, idiomatic_correct, wrong, runtime_unavailable };
-pub const Exercise = struct { id: []const u8, title: []const u8, prompt: []const u8, competency: []const u8, topic: []const u8 = "collections", level: []const u8 = "beginner", kind: ExerciseKind };
+pub const Exercise = struct { id: []const u8, title: []const u8, prompt: []const u8, competency: []const u8, topic: []const u8 = "collections", level: []const u8 = "beginner", kind: ExerciseKind, guidance: []const []const u8 = &progression };
 pub const exercises = [_]Exercise{.{ .id = "collections.map-names", .title = "Transform users into names", .prompt = "Return the names of all users using an Enumerable method.", .competency = "enumerable_transformation", .kind = .map_names }};
 pub const Result = struct {
+    attempt_id: i64 = 0,
     outcome: Outcome,
     syntax_ok: bool,
     behavioral_check: []const u8,
@@ -30,11 +33,28 @@ pub fn submit(allocator: std.mem.Allocator, db: *storage.Database, learner_id: i
     const result = try validate(allocator, exercise, source);
     const attempt_id = try db.recordExerciseAttemptAnalysis(learner_id, exercise.id, exercise.title, exercise.prompt, exercise.competency, source, @tagName(result.outcome), result.syntax_ok, result.behavioral_check, result.feedback, result.deterministic, source_sha256, result.idiom_id, result.idiom_evidence, if (result.idiom_id != null) "corpus examples for the recognized idiom are available via `rgp examples map`" else "no idiom corpus evidence claimed");
     const competency = try db.getOrAddCompetency(exercise.competency, exercise.title);
-    const level: u8 = switch (result.outcome) { .idiomatic_correct => 4, .manual_correct => 3, .correct, .alternative_correct => 2, .wrong, .runtime_unavailable => 1, .syntax_error => 0 };
-    const evidence_key = try std.fmt.allocPrint(allocator, "exercise-attempt-{d}", .{attempt_id}); defer allocator.free(evidence_key);
-    const source_id = try std.fmt.allocPrint(allocator, "{d}", .{attempt_id}); defer allocator.free(source_id);
+    const level: u8 = switch (result.outcome) {
+        .idiomatic_correct => 4,
+        .manual_correct => 3,
+        .correct, .alternative_correct => 2,
+        .wrong, .runtime_unavailable => 1,
+        .syntax_error => 0,
+    };
+    const evidence_key = try std.fmt.allocPrint(allocator, "exercise-attempt-{d}", .{attempt_id});
+    defer allocator.free(evidence_key);
+    const source_id = try std.fmt.allocPrint(allocator, "{d}", .{attempt_id});
+    defer allocator.free(source_id);
     _ = try db.recordCompetencyEvidence(.{ .learner_id = learner_id, .competency_id = competency, .evidence_key = evidence_key, .dimension = if (level >= 3) .demonstrated else .practice, .level = level, .source_type = "exercise_attempt", .source_id = source_id, .detail = result.idiom_evidence, .attributed_to = "learner" });
-    return result;
+    var submitted = result;
+    submitted.attempt_id = attempt_id;
+    return submitted;
+}
+
+/// Return only the learner-requested progression level; content is never auto-revealed.
+pub fn reveal(allocator: std.mem.Allocator, db: *storage.Database, learner_id: i64, attempt_id: i64, requested: RevealLevel) ![]const u8 {
+    _ = allocator;
+    _ = try db.revealAttempt(learner_id, attempt_id, @intFromEnum(requested));
+    return progression[@intFromEnum(requested)];
 }
 
 /// the offline core never executes submitted Ruby on the host.
@@ -67,7 +87,6 @@ test "static exercise distinguishes syntax from unavailable behavioral validatio
     try std.testing.expectEqual(Outcome.syntax_error, invalid.outcome);
     const candidate = try validate(std.testing.allocator, exercise, "users.map { |user| user.name }");
     try std.testing.expectEqual(Outcome.idiomatic_correct, candidate.outcome);
-
 }
 test "submission persists analysis and competency evidence" {
     var db = try storage.Database.open(std.testing.allocator, ":memory:");
@@ -77,6 +96,20 @@ test "submission persists analysis and competency evidence" {
     try std.testing.expectEqual(Outcome.idiomatic_correct, result.outcome);
     try std.testing.expectEqual(@as(i64, 1), try db.count("exercise_attempts"));
     try std.testing.expectEqual(@as(i64, 1), try db.count("competency_evidence"));
+}
+
+test "reveal progression is learner-controlled and persisted per attempt" {
+    var db = try storage.Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+    const learner = try db.upsertLearner("hint-learner", "Ada", .beginner);
+    const result = try submit(std.testing.allocator, &db, learner, exercises[0], "users.each { |user| names << user.name }", "sha-hints");
+    const hint = try reveal(std.testing.allocator, &db, learner, result.attempt_id, .hint);
+    try std.testing.expect(std.mem.indexOf(u8, hint, "users.map") == null);
+    try std.testing.expectEqual(@as(i64, 0), try db.attemptReveal(learner, result.attempt_id));
+    _ = try reveal(std.testing.allocator, &db, learner, result.attempt_id, .solution);
+    try std.testing.expectEqual(@as(i64, 3), try db.attemptReveal(learner, result.attempt_id));
+    _ = try db.revealAttempt(learner, result.attempt_id, 0);
+    try std.testing.expectEqual(@as(i64, 3), try db.attemptReveal(learner, result.attempt_id));
 }
 
 test "wrong static submissions remain wrong" {

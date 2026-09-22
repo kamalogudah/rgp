@@ -23,7 +23,7 @@ const ok = 0;
 const row = 100;
 const done = 101;
 const transient: ?*const anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
-pub const latest_schema_version = 9;
+pub const latest_schema_version = 10;
 
 pub const LearnerProfile = enum { beginner, intermediate, senior };
 pub const EvidenceDimension = enum { exposure, practice, demonstrated };
@@ -204,6 +204,7 @@ pub const Database = struct {
         if (current < 7) try self.exec("BEGIN IMMEDIATE;" ++ migration_7 ++ "INSERT INTO schema_migrations VALUES(7);COMMIT;");
         if (current < 8) try self.exec("BEGIN IMMEDIATE;" ++ migration_8 ++ "INSERT INTO schema_migrations VALUES(8);COMMIT;");
         if (current < 9) try self.exec("BEGIN IMMEDIATE;" ++ migration_9 ++ "INSERT INTO schema_migrations VALUES(9);COMMIT;");
+        if (current < 10) try self.exec("BEGIN IMMEDIATE;" ++ migration_10 ++ "INSERT INTO schema_migrations VALUES(10);COMMIT;");
     }
     pub fn schemaVersion(self: *Database) !i64 {
         return self.one("SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", .{});
@@ -408,12 +409,29 @@ pub const Database = struct {
         const idiom_id = try self.getOrAddIdiom(value.idiom_id, value.rule_version);
         return self.insert("INSERT INTO observation_idioms(observation_id,idiom_id,reason,confidence,classification,rule_version) VALUES(?1,?2,?3,?4,?5,?6);", .{ observation_id, idiom_id, value.reason, value.confidence, value.classification, value.rule_version });
     }
-    pub fn recordExerciseAttemptAnalysis(self: *Database, learner_id: i64, exercise_key: []const u8, title: []const u8, prompt: []const u8, competency_key: []const u8, source: []const u8, outcome: []const u8, syntax_ok: bool, behavioral_check: []const u8, feedback: []const u8, deterministic: bool, source_sha256: []const u8, idiom_id: ?[]const u8, idiom_evidence: []const u8, corpus_evidence: []const u8) !i64 { const id = try self.recordExerciseAttempt(learner_id, exercise_key, title, prompt, competency_key, source, outcome, syntax_ok, behavioral_check, feedback, deterministic, source_sha256); try self.execute("UPDATE exercise_attempts SET idiom_id=?2,idiom_evidence=?3,corpus_evidence=?4 WHERE id=?1;", .{ id, idiom_id, idiom_evidence, corpus_evidence }); return id; }
+    pub fn recordExerciseAttemptAnalysis(self: *Database, learner_id: i64, exercise_key: []const u8, title: []const u8, prompt: []const u8, competency_key: []const u8, source: []const u8, outcome: []const u8, syntax_ok: bool, behavioral_check: []const u8, feedback: []const u8, deterministic: bool, source_sha256: []const u8, idiom_id: ?[]const u8, idiom_evidence: []const u8, corpus_evidence: []const u8) !i64 {
+        const id = try self.recordExerciseAttempt(learner_id, exercise_key, title, prompt, competency_key, source, outcome, syntax_ok, behavioral_check, feedback, deterministic, source_sha256);
+        try self.execute("UPDATE exercise_attempts SET idiom_id=?2,idiom_evidence=?3,corpus_evidence=?4 WHERE id=?1;", .{ id, idiom_id, idiom_evidence, corpus_evidence });
+        return id;
+    }
 
     pub fn recordExerciseAttempt(self: *Database, learner_id: i64, exercise_key: []const u8, title: []const u8, prompt: []const u8, competency_key: []const u8, source: []const u8, outcome: []const u8, syntax_ok: bool, behavioral_check: []const u8, feedback: []const u8, deterministic: bool, source_sha256: []const u8) !i64 {
         const exercise_id = if (try self.oneOrNull("SELECT id FROM exercises WHERE key=?1;", .{exercise_key})) |id| id else try self.insert("INSERT INTO exercises(key,title,prompt,competency_key) VALUES(?1,?2,?3,?4);", .{ exercise_key, title, prompt, competency_key });
         if (try self.oneOrNull("SELECT id FROM exercise_attempts WHERE learner_id=?1 AND exercise_id=?2 AND source_sha256=?3;", .{ learner_id, exercise_id, source_sha256 })) |id| return id;
         return self.insert("INSERT INTO exercise_attempts(learner_id,exercise_id,source,outcome,syntax_ok,behavioral_check,feedback,deterministic,source_sha256) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9);", .{ learner_id, exercise_id, source, outcome, @as(i64, if (syntax_ok) 1 else 0), behavioral_check, feedback, @as(i64, if (deterministic) 1 else 0), source_sha256 });
+    }
+
+    /// Reveal requests are monotonic for this exact learner attempt.
+    pub fn revealAttempt(self: *Database, learner_id: i64, attempt_id: i64, level: i64) !i64 {
+        if (level < 0 or level > 4) return error.InvalidRevealLevel;
+        if (try self.oneOrNull("SELECT id FROM exercise_attempts WHERE id=?1 AND learner_id=?2;", .{ attempt_id, learner_id }) == null) return error.AttemptNotFound;
+        try self.execute("INSERT INTO attempt_reveals(attempt_id,level) VALUES(?1,?2) ON CONFLICT(attempt_id) DO UPDATE SET level=MAX(level,excluded.level),updated_at=unixepoch();", .{ attempt_id, level });
+        return self.one("SELECT level FROM attempt_reveals WHERE attempt_id=?1;", .{attempt_id});
+    }
+
+    pub fn attemptReveal(self: *Database, learner_id: i64, attempt_id: i64) !i64 {
+        if (try self.oneOrNull("SELECT id FROM exercise_attempts WHERE id=?1 AND learner_id=?2;", .{ attempt_id, learner_id }) == null) return error.AttemptNotFound;
+        return (try self.oneOrNull("SELECT level FROM attempt_reveals WHERE attempt_id=?1;", .{attempt_id})) orelse 0;
     }
 
     pub fn count(self: *Database, comptime table: []const u8) !i64 {
@@ -794,6 +812,7 @@ const migration_5 = "ALTER TABLE analysis_runs ADD COLUMN ruby_version TEXT;ALTE
 const migration_6 = "CREATE TABLE statistics_cache(cache_key TEXT PRIMARY KEY,denominator INTEGER NOT NULL,count INTEGER NOT NULL,rgp_version TEXT NOT NULL,prism_version TEXT NOT NULL,classifier_version TEXT NOT NULL,taxonomy_version TEXT NOT NULL);";
 const migration_8 = "CREATE TABLE exercises(id INTEGER PRIMARY KEY,key TEXT NOT NULL UNIQUE,title TEXT NOT NULL,prompt TEXT NOT NULL,competency_key TEXT NOT NULL);" ++ "CREATE TABLE exercise_attempts(id INTEGER PRIMARY KEY,learner_id INTEGER NOT NULL REFERENCES learners(id),exercise_id INTEGER NOT NULL REFERENCES exercises(id),source TEXT NOT NULL,outcome TEXT NOT NULL,syntax_ok INTEGER NOT NULL,behavioral_check TEXT NOT NULL,feedback TEXT NOT NULL,deterministic INTEGER NOT NULL,source_sha256 TEXT NOT NULL,created_at INTEGER NOT NULL DEFAULT(unixepoch()),UNIQUE(learner_id,exercise_id,source_sha256));" ++ "CREATE INDEX exercise_attempts_lookup ON exercise_attempts(learner_id,exercise_id,created_at);";
 const migration_9 = "ALTER TABLE exercise_attempts ADD COLUMN idiom_id TEXT;ALTER TABLE exercise_attempts ADD COLUMN idiom_evidence TEXT NOT NULL DEFAULT 'none';ALTER TABLE exercise_attempts ADD COLUMN corpus_evidence TEXT NOT NULL DEFAULT 'no corpus evidence claimed';";
+const migration_10 = "CREATE TABLE attempt_reveals(attempt_id INTEGER PRIMARY KEY REFERENCES exercise_attempts(id),level INTEGER NOT NULL CHECK(level BETWEEN 0 AND 4),updated_at INTEGER NOT NULL DEFAULT(unixepoch()));";
 const migration_7 = "CREATE TABLE learners(id INTEGER PRIMARY KEY,external_id TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,profile TEXT NOT NULL CHECK(profile IN(\"beginner\",\"intermediate\",\"senior\")),created_at INTEGER NOT NULL DEFAULT(unixepoch()),updated_at INTEGER NOT NULL DEFAULT(unixepoch()));" ++
     "CREATE TABLE learning_sessions(id INTEGER PRIMARY KEY,learner_id INTEGER NOT NULL REFERENCES learners(id),session_key TEXT NOT NULL,started_at INTEGER NOT NULL DEFAULT(unixepoch()),resumed_at INTEGER,UNIQUE(learner_id,session_key));" ++
     "CREATE TABLE lessons(id INTEGER PRIMARY KEY,key TEXT NOT NULL UNIQUE,title TEXT NOT NULL);" ++

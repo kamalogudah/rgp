@@ -25,6 +25,7 @@ pub const corpus = @import("corpus/root.zig");
 pub const cli = @import("cli/root.zig");
 pub const learning = @import("learning.zig");
 pub const exercises = @import("exercises.zig");
+pub const agent = @import("agent/root.zig");
 
 // Force analysis of the repository discovery module so its declarations and
 // tests are compiled and exercised by the deterministic test build.
