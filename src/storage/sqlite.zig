@@ -23,7 +23,17 @@ const ok = 0;
 const row = 100;
 const done = 101;
 const transient: ?*const anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
-pub const latest_schema_version = 6;
+pub const latest_schema_version = 7;
+
+pub const LearnerProfile = enum { beginner, intermediate, senior };
+pub const EvidenceDimension = enum { exposure, practice, demonstrated };
+
+pub const Learner = struct { id: i64, external_id: []u8, display_name: []u8, profile: LearnerProfile };
+pub const LessonProgress = struct { learner_id: i64, lesson_id: i64, status: []const u8, position: i64 = 0 };
+pub const CompetencyEvidence = struct {
+    learner_id: i64, competency_id: i64, evidence_key: []const u8, dimension: EvidenceDimension, level: u8,
+    source_type: []const u8, source_id: []const u8, detail: []const u8, attributed_to: []const u8,
+};
 
 pub const Run = struct {
     repository_id: i64,
@@ -184,6 +194,7 @@ pub const Database = struct {
         if (current < 4) try self.exec("BEGIN IMMEDIATE;" ++ migration_4 ++ "INSERT INTO schema_migrations VALUES(4);COMMIT;");
         if (current < 5) try self.exec("BEGIN IMMEDIATE;" ++ migration_5 ++ "INSERT INTO schema_migrations VALUES(5);COMMIT;");
         if (current < 6) try self.exec("BEGIN IMMEDIATE;" ++ migration_6 ++ "INSERT INTO schema_migrations VALUES(6);COMMIT;");
+        if (current < 7) try self.exec("BEGIN IMMEDIATE;" ++ migration_7 ++ "INSERT INTO schema_migrations VALUES(7);COMMIT;");
     }
     pub fn schemaVersion(self: *Database) !i64 {
         return self.one("SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", .{});
@@ -391,6 +402,57 @@ pub const Database = struct {
     pub fn count(self: *Database, comptime table: []const u8) !i64 {
         return self.one("SELECT COUNT(*) FROM " ++ table ++ ";", .{});
     }
+    pub fn upsertLearner(self: *Database, external_id: []const u8, display_name: []const u8, profile: LearnerProfile) !i64 {
+        if (try self.oneOrNull("SELECT id FROM learners WHERE external_id=?1;", .{external_id})) |id| {
+            try self.execute("UPDATE learners SET display_name=?2,profile=?3,updated_at=unixepoch() WHERE id=?1;", .{ id, display_name, profileText(profile) });
+            return id;
+        }
+        return self.insert("INSERT INTO learners(external_id,display_name,profile) VALUES(?1,?2,?3);", .{ external_id, display_name, profileText(profile) });
+    }
+
+    pub fn startLearningSession(self: *Database, learner_id: i64, session_key: []const u8) !i64 {
+        if (try self.oneOrNull("SELECT id FROM learning_sessions WHERE learner_id=?1 AND session_key=?2;", .{ learner_id, session_key })) |id| {
+            try self.execute("UPDATE learning_sessions SET resumed_at=unixepoch() WHERE id=?1;", .{id});
+            return id;
+        }
+        return self.insert("INSERT INTO learning_sessions(learner_id,session_key) VALUES(?1,?2);", .{ learner_id, session_key });
+    }
+
+    pub fn recordLessonProgress(self: *Database, learner_id: i64, lesson_key: []const u8, title: []const u8, status: []const u8, position: i64) !i64 {
+        const lesson_id = if (try self.oneOrNull("SELECT id FROM lessons WHERE key=?1;", .{lesson_key})) |id| blk: {
+            try self.execute("UPDATE lessons SET title=?2 WHERE id=?1;", .{ id, title });
+            break :blk id;
+        } else try self.insert("INSERT INTO lessons(key,title) VALUES(?1,?2);", .{ lesson_key, title });
+        if (try self.oneOrNull("SELECT id FROM lesson_progress WHERE learner_id=?1 AND lesson_id=?2;", .{ learner_id, lesson_id })) |progress_id| {
+            try self.execute("UPDATE lesson_progress SET status=?3,position=?4,updated_at=unixepoch(),completed_at=CASE WHEN ?3=\"completed\" THEN unixepoch() ELSE completed_at END WHERE id=?1 AND learner_id=?2;", .{ progress_id, learner_id, status, position });
+            return progress_id;
+        }
+        return self.insert("INSERT INTO lesson_progress(learner_id,lesson_id,status,position,completed_at) VALUES(?1,?2,?3,?4,CASE WHEN ?3=\"completed\" THEN unixepoch() ELSE NULL END);", .{ learner_id, lesson_id, status, position });
+    }
+
+    pub fn getOrAddCompetency(self: *Database, key: []const u8, title: []const u8) !i64 {
+        if (try self.oneOrNull("SELECT id FROM competencies WHERE key=?1;", .{key})) |id| return id;
+        return self.insert("INSERT INTO competencies(key,title) VALUES(?1,?2);", .{ key, title });
+    }
+
+    pub fn recordCompetencyEvidence(self: *Database, value: CompetencyEvidence) !i64 {
+        if (value.level > 4) return error.InvalidCompetencyLevel;
+        const dimension = dimensionText(value.dimension);
+        if (try self.oneOrNull("SELECT id FROM competency_evidence WHERE learner_id=?1 AND evidence_key=?2;", .{ value.learner_id, value.evidence_key })) |id| {
+            try self.execute("UPDATE competency_evidence SET competency_id=?3,dimension=?4,level=?5,source_type=?6,source_id=?7,detail=?8,attributed_to=?9,updated_at=unixepoch() WHERE id=?1 AND learner_id=?2;", .{ id, value.learner_id, value.competency_id, dimension, value.level, value.source_type, value.source_id, value.detail, value.attributed_to });
+            try self.refreshCompetency(value.learner_id, value.competency_id);
+            return id;
+        }
+        const id = try self.insert("INSERT INTO competency_evidence(learner_id,competency_id,evidence_key,dimension,level,source_type,source_id,detail,attributed_to) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9);", .{ value.learner_id, value.competency_id, value.evidence_key, dimension, value.level, value.source_type, value.source_id, value.detail, value.attributed_to });
+        try self.refreshCompetency(value.learner_id, value.competency_id);
+        return id;
+    }
+
+    fn refreshCompetency(self: *Database, learner_id: i64, competency_id: i64) !void {
+        try self.execute("INSERT INTO learner_competencies(learner_id,competency_id) VALUES(?1,?2) ON CONFLICT(learner_id,competency_id) DO NOTHING;", .{ learner_id, competency_id });
+        try self.execute("UPDATE learner_competencies SET exposure_level=COALESCE((SELECT MAX(level) FROM competency_evidence WHERE learner_id=?1 AND competency_id=?2 AND dimension=\"exposure\"),0),practice_level=COALESCE((SELECT MAX(level) FROM competency_evidence WHERE learner_id=?1 AND competency_id=?2 AND dimension=\"practice\"),0),demonstrated_level=COALESCE((SELECT MAX(level) FROM competency_evidence WHERE learner_id=?1 AND competency_id=?2 AND dimension=\"demonstrated\"),0),updated_at=unixepoch() WHERE learner_id=?1 AND competency_id=?2;", .{ learner_id, competency_id });
+    }
+
     pub fn runStatus(self: *Database, id: i64) !i64 {
         return self.one("SELECT CASE status WHEN 'running' THEN 0 WHEN 'completed' THEN 1 WHEN 'failed' THEN 2 END FROM analysis_runs WHERE id=?1;", .{id});
     }
@@ -678,6 +740,8 @@ fn bind(statement: *Stmt, index: c_int, value: anytype) !void {
     };
     if (rc != ok) return error.Sqlite;
 }
+fn profileText(value: LearnerProfile) []const u8 { return switch (value) { .beginner => "beginner", .intermediate => "intermediate", .senior => "senior" }; }
+fn dimensionText(value: EvidenceDimension) []const u8 { return switch (value) { .exposure => "exposure", .practice => "practice", .demonstrated => "demonstrated" }; }
 const migration_1 =
     "CREATE TABLE repositories(id INTEGER PRIMARY KEY,origin TEXT NOT NULL UNIQUE);" ++
     "CREATE TABLE commits(id INTEGER PRIMARY KEY,repository_id INTEGER NOT NULL REFERENCES repositories(id),sha TEXT NOT NULL,UNIQUE(repository_id,sha));" ++
@@ -699,6 +763,14 @@ const migration_3 = "ALTER TABLE files ADD COLUMN classification TEXT NOT NULL D
 const migration_4 = "CREATE TABLE idioms(id INTEGER PRIMARY KEY,name TEXT NOT NULL,title TEXT NOT NULL,rule_version TEXT NOT NULL,UNIQUE(name,rule_version));" ++ "CREATE TABLE observation_idioms(observation_id INTEGER NOT NULL REFERENCES observations(id),idiom_id INTEGER NOT NULL REFERENCES idioms(id),reason TEXT NOT NULL,confidence TEXT NOT NULL,classification TEXT NOT NULL CHECK(classification IN('proven_equivalence', 'potential_alternative')),rule_version TEXT NOT NULL,PRIMARY KEY(observation_id,idiom_id,rule_version));" ++ "CREATE INDEX observation_idioms_idiom ON observation_idioms(idiom_id);";
 const migration_5 = "ALTER TABLE analysis_runs ADD COLUMN ruby_version TEXT;ALTER TABLE repositories ADD COLUMN cohort TEXT;";
 const migration_6 = "CREATE TABLE statistics_cache(cache_key TEXT PRIMARY KEY,denominator INTEGER NOT NULL,count INTEGER NOT NULL,rgp_version TEXT NOT NULL,prism_version TEXT NOT NULL,classifier_version TEXT NOT NULL,taxonomy_version TEXT NOT NULL);";
+const migration_7 = "CREATE TABLE learners(id INTEGER PRIMARY KEY,external_id TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,profile TEXT NOT NULL CHECK(profile IN(\"beginner\",\"intermediate\",\"senior\")),created_at INTEGER NOT NULL DEFAULT(unixepoch()),updated_at INTEGER NOT NULL DEFAULT(unixepoch()));" ++
+    "CREATE TABLE learning_sessions(id INTEGER PRIMARY KEY,learner_id INTEGER NOT NULL REFERENCES learners(id),session_key TEXT NOT NULL,started_at INTEGER NOT NULL DEFAULT(unixepoch()),resumed_at INTEGER,UNIQUE(learner_id,session_key));" ++
+    "CREATE TABLE lessons(id INTEGER PRIMARY KEY,key TEXT NOT NULL UNIQUE,title TEXT NOT NULL);" ++
+    "CREATE TABLE lesson_progress(id INTEGER PRIMARY KEY,learner_id INTEGER NOT NULL REFERENCES learners(id),lesson_id INTEGER NOT NULL REFERENCES lessons(id),status TEXT NOT NULL CHECK(status IN(\"not_started\",\"in_progress\",\"completed\")),position INTEGER NOT NULL DEFAULT 0,completed_at INTEGER,updated_at INTEGER NOT NULL DEFAULT(unixepoch()),UNIQUE(learner_id,lesson_id));" ++
+    "CREATE TABLE competencies(id INTEGER PRIMARY KEY,key TEXT NOT NULL UNIQUE,title TEXT NOT NULL);" ++
+    "CREATE TABLE learner_competencies(learner_id INTEGER NOT NULL REFERENCES learners(id),competency_id INTEGER NOT NULL REFERENCES competencies(id),exposure_level INTEGER NOT NULL DEFAULT 0 CHECK(exposure_level BETWEEN 0 AND 4),practice_level INTEGER NOT NULL DEFAULT 0 CHECK(practice_level BETWEEN 0 AND 4),demonstrated_level INTEGER NOT NULL DEFAULT 0 CHECK(demonstrated_level BETWEEN 0 AND 4),updated_at INTEGER NOT NULL DEFAULT(unixepoch()),PRIMARY KEY(learner_id,competency_id));" ++
+    "CREATE TABLE competency_evidence(id INTEGER PRIMARY KEY,learner_id INTEGER NOT NULL REFERENCES learners(id),competency_id INTEGER NOT NULL REFERENCES competencies(id),evidence_key TEXT NOT NULL,dimension TEXT NOT NULL CHECK(dimension IN(\"exposure\",\"practice\",\"demonstrated\")),level INTEGER NOT NULL CHECK(level BETWEEN 0 AND 4),source_type TEXT NOT NULL,source_id TEXT NOT NULL,detail TEXT NOT NULL,attributed_to TEXT NOT NULL,created_at INTEGER NOT NULL DEFAULT(unixepoch()),updated_at INTEGER NOT NULL DEFAULT(unixepoch()),UNIQUE(learner_id,evidence_key));" ++
+    "CREATE INDEX competency_evidence_lookup ON competency_evidence(learner_id,competency_id,dimension);";
 
 test "fresh migration stores versioned raw observations and provenance" {
     var db = try Database.open(std.testing.allocator, ":memory:");
@@ -876,4 +948,24 @@ test "incomplete runs are detected independently of completed observations" {
         std.testing.allocator.free(stats);
     }
     try std.testing.expectEqual(@as(i64, 1), stats[0].count);
+}
+
+test "learner state survives restart and evidence retries are idempotent" {
+    var db = try Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+    const learner = try db.upsertLearner("learner-1", "Ada", .beginner);
+    _ = try db.recordLessonProgress(learner, "arrays", "Arrays", "in_progress", 3);
+    _ = try db.recordLessonProgress(learner, "arrays", "Arrays", "completed", 9);
+    try std.testing.expectEqual(@as(i64, 1), try db.count("learners"));
+    try std.testing.expectEqual(@as(i64, 1), try db.count("lesson_progress"));
+    const competency = try db.getOrAddCompetency("arrays", "Arrays");
+    const evidence = CompetencyEvidence{ .learner_id = learner, .competency_id = competency, .evidence_key = "exercise-1", .dimension = .practice, .level = 2, .source_type = "exercise_attempt", .source_id = "attempt-1", .detail = "used each", .attributed_to = "learner" };
+    const first = try db.recordCompetencyEvidence(evidence);
+    const second = try db.recordCompetencyEvidence(evidence);
+    try std.testing.expectEqual(first, second);
+    try std.testing.expectEqual(@as(i64, 1), try db.count("competency_evidence"));
+    try std.testing.expectEqual(@as(i64, 1), try db.count("learner_competencies"));
+    try std.testing.expectEqual(@as(i64, 1), try db.startLearningSession(learner, "session-1"));
+    try std.testing.expectEqual(@as(i64, 1), try db.startLearningSession(learner, "session-1"));
+    try std.testing.expectEqual(@as(i64, 1), try db.count("learning_sessions"));
 }
