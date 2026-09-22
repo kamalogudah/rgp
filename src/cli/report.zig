@@ -10,6 +10,9 @@ const default_database = ".rgp/rgp.db";
 pub const Options = struct {
     topic: ?[]const u8 = null,
     json: bool = false,
+    markdown: bool = false,
+    ruby_version: ?[]const u8 = null,
+    cohort: ?[]const u8 = null,
     classification: ?[]const u8 = null,
     receiver_kind: ?[]const u8 = null,
     project_origin: ?[]const u8 = null,
@@ -29,6 +32,12 @@ pub fn parseArgs(args: []const []const u8) !ParseResult {
             return .help;
         } else if (std.mem.eql(u8, arg, "--json")) {
             options.json = true;
+        } else if (std.mem.eql(u8, arg, "--markdown")) {
+            options.markdown = true;
+        } else if (std.mem.eql(u8, arg, "--ruby")) {
+            i += 1; if (i >= args.len) return error.MissingValue; options.ruby_version = args[i];
+        } else if (std.mem.eql(u8, arg, "--cohort")) {
+            i += 1; if (i >= args.len) return error.MissingValue; options.cohort = args[i];
         } else if (std.mem.eql(u8, arg, "--production")) {
             options.classification = "production";
         } else if (std.mem.eql(u8, arg, "--test")) {
@@ -81,7 +90,8 @@ pub fn run(io: Io, allocator: std.mem.Allocator, args: []const []const u8, write
                 .repository_origin = options.project_origin,
                 .classification = options.classification,
                 .receiver_kind = options.receiver_kind,
-            };
+                .ruby_version = options.ruby_version,
+                .cohort = options.cohort,            };
 
             var report = reports.reportTopic(allocator, &db, topic, filter) catch |err| switch (err) {
                 error.UnknownTopic => {
@@ -96,7 +106,7 @@ pub fn run(io: Io, allocator: std.mem.Allocator, args: []const []const u8, write
             };
             defer report.deinit(allocator);
 
-            try reports.renderTopic(allocator, writer, report, .{ .json = options.json });
+            try reports.renderTopic(allocator, writer, report, .{ .json = options.json, .markdown = options.markdown });
             return 0;
         },
     }
@@ -105,7 +115,7 @@ pub fn run(io: Io, allocator: std.mem.Allocator, args: []const []const u8, write
 const report_usage =
     "\nReport usage:\n" ++
     "  rgp report [topic] [--json] [--production] [--test] [--spec]\n" ++
-    "                       [--receiver-kind <kind>] [--project <origin>]\n" ++
+    "                       [--receiver-kind <kind>] [--project <origin>] [--ruby <version>] [--cohort <name>]\n" ++
     "\n" ++
     "Topics:\n" ++
     "  conditionals, loops_and_iteration, collections,\n" ++

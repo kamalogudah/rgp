@@ -28,6 +28,7 @@ pub const Target = struct {
     commit_sha: []const u8,
     snapshot_id: ?i64 = null,
     exclude: []const []const u8 = &.{},
+    cohort: ?[]const u8 = null,
 };
 
 pub const FileStatus = enum { analyzed, skipped, failed };
@@ -83,6 +84,7 @@ pub fn analyze(allocator: std.mem.Allocator, io: Io, db: *storage.Database, targ
     }
 
     const repo_id = try db.repositoryId(target.origin);
+    try db.setRepositoryCohort(repo_id, target.cohort);
     const commit_id = try db.commitId(repo_id, target.commit_sha);
 
     var discovered = discovery.discover(io, allocator, target.path, .{ .exclude = target.exclude }) catch |err| {
@@ -107,6 +109,7 @@ pub fn analyze(allocator: std.mem.Allocator, io: Io, db: *storage.Database, targ
         .prism_version = versions.prism_version,
         .classifier_version = versions.classifier_version,
         .taxonomy_version = versions.taxonomy_version,
+        .ruby_version = discovered.metadata.ruby_version,
     };
 
     var current_file_ids = std.ArrayList(i64).empty;

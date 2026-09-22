@@ -138,6 +138,7 @@ fn analyzeCorpus(io: Io, allocator: std.mem.Allocator, writer: *Io.Writer) !u8 {
             .commit_sha = repo.revision,
             .snapshot_id = snapshot_id,
             .exclude = repo.exclude,
+            .cohort = if (repo.category) |category| category.asString() else null,
         }, versions);
         defer result.deinit(allocator);
 

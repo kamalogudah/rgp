@@ -12,6 +12,7 @@ const corpus_path = "corpus.toml";
 pub const Options = struct {
     constructs: []const []const u8 = &.{},
     json: bool = false,
+    markdown: bool = false,
     classification: ?[]const u8 = null,
     receiver_kind: ?[]const u8 = null,
     project_origin: ?[]const u8 = null,
@@ -34,6 +35,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParseR
             return .help;
         } else if (std.mem.eql(u8, arg, "--json")) {
             options.json = true;
+        } else if (std.mem.eql(u8, arg, "--markdown")) {
+            options.markdown = true;
         } else if (std.mem.eql(u8, arg, "--production")) {
             options.classification = "production";
         } else if (std.mem.eql(u8, arg, "--test")) {
@@ -106,7 +109,7 @@ pub fn run(io: Io, allocator: std.mem.Allocator, args: []const []const u8, write
             };
             defer comparison.deinit(allocator);
 
-            try reports.renderComparison(allocator, writer, comparison, .{ .json = options.json });
+            try reports.renderComparison(allocator, writer, comparison, .{ .json = options.json, .markdown = options.markdown });
             return 0;
         },
     }

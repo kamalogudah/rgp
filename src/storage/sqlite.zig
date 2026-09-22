@@ -20,7 +20,7 @@ const ok = 0;
 const row = 100;
 const done = 101;
 const transient: ?*const anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
-pub const latest_schema_version = 4;
+pub const latest_schema_version = 5;
 
 pub const Run = struct {
     repository_id: i64,
@@ -30,6 +30,7 @@ pub const Run = struct {
     prism_version: []const u8,
     classifier_version: []const u8,
     taxonomy_version: []const u8,
+    ruby_version: ?[]const u8 = null,
 };
 pub const Observation = struct {
     repository_id: i64,
@@ -67,6 +68,8 @@ pub const StatisticsQuery = struct {
     prism_version: ?[]const u8 = null,
     classifier_version: ?[]const u8 = null,
     taxonomy_version: ?[]const u8 = null,
+    ruby_version: ?[]const u8 = null,
+    cohort: ?[]const u8 = null,
 };
 
 /// The filter values that produced a statistic, preserved so every reported
@@ -80,6 +83,8 @@ pub const AppliedFilter = struct {
     prism_version: ?[]u8 = null,
     classifier_version: ?[]u8 = null,
     taxonomy_version: ?[]u8 = null,
+    ruby_version: ?[]u8 = null,
+    cohort: ?[]u8 = null,
 
     pub fn deinit(self: *AppliedFilter, allocator: std.mem.Allocator) void {
         if (self.repository_origin) |s| allocator.free(s);
@@ -89,6 +94,8 @@ pub const AppliedFilter = struct {
         if (self.prism_version) |s| allocator.free(s);
         if (self.classifier_version) |s| allocator.free(s);
         if (self.taxonomy_version) |s| allocator.free(s);
+        if (self.ruby_version) |s| allocator.free(s);
+        if (self.cohort) |s| allocator.free(s);
         self.* = .{};
     }
 };
@@ -103,6 +110,8 @@ pub const SourceObservation = struct {
     line: i64,
     column: i64,
     raw_json: []u8,
+    start_offset: i64,
+    end_offset: i64,
     pub fn deinit(self: *SourceObservation, allocator: std.mem.Allocator) void {
         allocator.free(self.repository_origin);
         allocator.free(self.commit_sha);
@@ -170,6 +179,7 @@ pub const Database = struct {
         if (current < 2) try self.exec("BEGIN IMMEDIATE;" ++ migration_2 ++ "INSERT INTO schema_migrations VALUES(2);COMMIT;");
         if (current < 3) try self.exec("BEGIN IMMEDIATE;" ++ migration_3 ++ "INSERT INTO schema_migrations VALUES(3);COMMIT;");
         if (current < 4) try self.exec("BEGIN IMMEDIATE;" ++ migration_4 ++ "INSERT INTO schema_migrations VALUES(4);COMMIT;");
+        if (current < 5) try self.exec("BEGIN IMMEDIATE;" ++ migration_5 ++ "INSERT INTO schema_migrations VALUES(5);COMMIT;");
     }
     pub fn schemaVersion(self: *Database) !i64 {
         return self.one("SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", .{});
@@ -177,6 +187,9 @@ pub const Database = struct {
 
     pub fn addRepository(self: *Database, origin: []const u8) !i64 {
         return self.insert("INSERT INTO repositories(origin) VALUES(?1);", .{origin});
+    }
+    pub fn setRepositoryCohort(self: *Database, repository_id: i64, cohort: ?[]const u8) !void {
+        try self.execute("UPDATE repositories SET cohort=?2 WHERE id=?1;", .{ repository_id, cohort });
     }
     pub fn repositoryId(self: *Database, origin: []const u8) !i64 {
         if (try self.oneOrNull("SELECT id FROM repositories WHERE origin=?1;", .{origin})) |id| return id;
@@ -318,7 +331,7 @@ pub const Database = struct {
     }
 
     pub fn beginRun(self: *Database, value: Run) !i64 {
-        return self.insert("INSERT INTO analysis_runs(repository_id,commit_id,snapshot_id,status,rgp_version,prism_version,classifier_version,taxonomy_version) VALUES(?1,?2,?3,'running',?4,?5,?6,?7);", .{ value.repository_id, value.commit_id, value.snapshot_id, value.rgp_version, value.prism_version, value.classifier_version, value.taxonomy_version });
+        return self.insert("INSERT INTO analysis_runs(repository_id,commit_id,snapshot_id,status,rgp_version,prism_version,classifier_version,taxonomy_version,ruby_version) VALUES(?1,?2,?3,'running',?4,?5,?6,?7,?8);", .{ value.repository_id, value.commit_id, value.snapshot_id, value.rgp_version, value.prism_version, value.classifier_version, value.taxonomy_version, value.ruby_version });
     }
     pub fn finishRun(self: *Database, id: i64, status: enum { completed, failed }, failure: ?[]const u8) !void {
         try self.execute("UPDATE analysis_runs SET status=?2,failure=?3,finished_at=unixepoch() WHERE id=?1 AND status='running';", .{ id, @tagName(status), failure });
@@ -381,17 +394,17 @@ pub const Database = struct {
             result.deinit(allocator);
         }
         for (constructs) |construct| {
-            const common = .{ q.snapshot_id, q.repository_id, q.repository_origin, q.classification, q.receiver_kind, q.rgp_version, q.prism_version, q.classifier_version, q.taxonomy_version };
-            const args = .{ q.snapshot_id, q.repository_id, q.repository_origin, q.classification, q.receiver_kind, q.rgp_version, q.prism_version, q.classifier_version, q.taxonomy_version, construct };
-            const where = " FROM observations o JOIN analysis_runs r ON r.id=o.analysis_run_id JOIN files f ON f.id=o.file_id JOIN repositories p ON p.id=o.repository_id JOIN commits cm ON cm.id=o.commit_id JOIN constructs c ON c.id=o.construct_id WHERE r.status='completed' AND (?1 IS NULL OR r.snapshot_id=?1) AND (?2 IS NULL OR o.repository_id=?2) AND (?3 IS NULL OR p.origin=?3) AND (?4 IS NULL OR f.classification=?4) AND (?5 IS NULL OR o.receiver_kind=?5) AND (?6 IS NULL OR r.rgp_version=?6) AND (?7 IS NULL OR r.prism_version=?7) AND (?8 IS NULL OR r.classifier_version=?8) AND (?9 IS NULL OR r.taxonomy_version=?9)";
+            const common = .{ q.snapshot_id, q.repository_id, q.repository_origin, q.classification, q.receiver_kind, q.rgp_version, q.prism_version, q.classifier_version, q.taxonomy_version, q.ruby_version, q.cohort };
+            const args = .{ q.snapshot_id, q.repository_id, q.repository_origin, q.classification, q.receiver_kind, q.rgp_version, q.prism_version, q.classifier_version, q.taxonomy_version, q.ruby_version, q.cohort, construct };
+            const where = " FROM observations o JOIN analysis_runs r ON r.id=o.analysis_run_id JOIN files f ON f.id=o.file_id JOIN repositories p ON p.id=o.repository_id JOIN commits cm ON cm.id=o.commit_id JOIN constructs c ON c.id=o.construct_id WHERE r.status='completed' AND (?1 IS NULL OR r.snapshot_id=?1) AND (?2 IS NULL OR o.repository_id=?2) AND (?3 IS NULL OR p.origin=?3) AND (?4 IS NULL OR f.classification=?4) AND (?5 IS NULL OR o.receiver_kind=?5) AND (?6 IS NULL OR r.rgp_version=?6) AND (?7 IS NULL OR r.prism_version=?7) AND (?8 IS NULL OR r.classifier_version=?8) AND (?9 IS NULL OR r.taxonomy_version=?9) AND (?10 IS NULL OR r.ruby_version=?10) AND (?11 IS NULL OR p.cohort=?11)";
             const denominator = try self.one("SELECT COUNT(*)" ++ where, common);
-            const matches = try self.one("SELECT COUNT(*)" ++ where ++ " AND c.name=?10", args);
+            const matches = try self.one("SELECT COUNT(*)" ++ where ++ " AND c.name=?12", args);
             const version = try self.string("SELECT COALESCE(MIN(r.rgp_version), char(117,110,107,110,111,119,110))" ++ where, common);
             const prism_version = try self.string("SELECT COALESCE(MIN(r.prism_version), char(117,110,107,110,111,119,110))" ++ where, common);
             const classifier_version = try self.string("SELECT COALESCE(MIN(r.classifier_version), char(117,110,107,110,111,119,110))" ++ where, common);
             const taxonomy_version = try self.string("SELECT COALESCE(MIN(r.taxonomy_version), char(117,110,107,110,111,119,110))" ++ where, common);
-            const projects = try self.projectCounts(allocator, "SELECT o.repository_id,p.origin,COUNT(*)" ++ where ++ " AND c.name=?10 GROUP BY o.repository_id,p.origin ORDER BY o.repository_id", args);
-            const supporting = try self.sourceObservations(allocator, "SELECT o.id,o.repository_id,p.origin,coalesce(cm.sha, char(117,110,107,110,111,119,110)),f.path,f.classification,o.line,o.column,o.raw_json" ++ where ++ " AND c.name=?10 ORDER BY o.id", args);
+            const projects = try self.projectCounts(allocator, "SELECT o.repository_id,p.origin,COUNT(*)" ++ where ++ " AND c.name=?12 GROUP BY o.repository_id,p.origin ORDER BY o.repository_id", args);
+            const supporting = try self.sourceObservations(allocator, "SELECT o.id,o.repository_id,p.origin,coalesce(cm.sha, char(117,110,107,110,111,119,110)),f.path,f.classification,o.line,o.column,o.raw_json,o.start_offset,o.end_offset" ++ where ++ " AND c.name=?12 ORDER BY o.id", args);
             try result.append(allocator, .{
                 .construct = try allocator.dupe(u8, construct),
                 .snapshot_id = q.snapshot_id,
@@ -408,6 +421,12 @@ pub const Database = struct {
             });
         }
         return try result.toOwnedSlice(allocator);
+    }
+
+    pub fn findExamples(self: *Database, allocator: std.mem.Allocator, construct: []const u8, q: StatisticsQuery, limit: usize) ![]SourceObservation {
+        const values = .{ q.snapshot_id, q.repository_id, q.repository_origin, q.classification, q.receiver_kind, q.rgp_version, q.prism_version, q.classifier_version, q.taxonomy_version, q.ruby_version, q.cohort, construct, @as(i64, @intCast(limit)) };
+        const where = " FROM observations o JOIN analysis_runs r ON r.id=o.analysis_run_id JOIN files f ON f.id=o.file_id JOIN repositories p ON p.id=o.repository_id JOIN commits cm ON cm.id=o.commit_id JOIN constructs c ON c.id=o.construct_id WHERE r.status='completed' AND (?1 IS NULL OR r.snapshot_id=?1) AND (?2 IS NULL OR o.repository_id=?2) AND (?3 IS NULL OR p.origin=?3) AND (?4 IS NULL OR f.classification=?4) AND (?5 IS NULL OR o.receiver_kind=?5) AND (?6 IS NULL OR r.rgp_version=?6) AND (?7 IS NULL OR r.prism_version=?7) AND (?8 IS NULL OR r.classifier_version=?8) AND (?9 IS NULL OR r.taxonomy_version=?9) AND (?10 IS NULL OR r.ruby_version=?10) AND (?11 IS NULL OR p.cohort=?11) AND c.name=?12 ORDER BY p.origin,f.path,o.start_offset LIMIT ?13";
+        return self.sourceObservations(allocator, "SELECT o.id,o.repository_id,p.origin,cm.sha,f.path,f.classification,o.line,o.column,o.raw_json,o.start_offset,o.end_offset" ++ where, values);
     }
 
     /// Returns true when any analysis run matching the query filters is not
@@ -453,7 +472,7 @@ pub const Database = struct {
             const rc = sqlite3_step(statement);
             if (rc == done) break;
             if (rc != row) return error.Sqlite;
-            try list.append(allocator, .{ .id = sqlite3_column_int64(statement, 0), .repository_id = sqlite3_column_int64(statement, 1), .repository_origin = try columnString(allocator, statement, 2), .commit_sha = try columnString(allocator, statement, 3), .file_path = try columnString(allocator, statement, 4), .classification = try columnString(allocator, statement, 5), .line = sqlite3_column_int64(statement, 6), .column = sqlite3_column_int64(statement, 7), .raw_json = try columnString(allocator, statement, 8) });
+            try list.append(allocator, .{ .id = sqlite3_column_int64(statement, 0), .repository_id = sqlite3_column_int64(statement, 1), .repository_origin = try columnString(allocator, statement, 2), .commit_sha = try columnString(allocator, statement, 3), .file_path = try columnString(allocator, statement, 4), .classification = try columnString(allocator, statement, 5), .line = sqlite3_column_int64(statement, 6), .column = sqlite3_column_int64(statement, 7), .raw_json = try columnString(allocator, statement, 8), .start_offset = sqlite3_column_int64(statement, 9), .end_offset = sqlite3_column_int64(statement, 10) });
         }
         return try list.toOwnedSlice(allocator);
     }
@@ -530,6 +549,8 @@ fn appliedFilter(allocator: std.mem.Allocator, q: StatisticsQuery) std.mem.Alloc
         .prism_version = try dupeOptional(allocator, q.prism_version),
         .classifier_version = try dupeOptional(allocator, q.classifier_version),
         .taxonomy_version = try dupeOptional(allocator, q.taxonomy_version),
+        .ruby_version = try dupeOptional(allocator, q.ruby_version),
+        .cohort = try dupeOptional(allocator, q.cohort),
     };
 }
 fn bindAll(statement: *Stmt, values: anytype) !void {
@@ -560,6 +581,7 @@ const migration_1 =
 const migration_2 = "ALTER TABLE observations ADD COLUMN block_syntax TEXT;";
 const migration_3 = "ALTER TABLE files ADD COLUMN classification TEXT NOT NULL DEFAULT 'production';";
 const migration_4 = "CREATE TABLE idioms(id INTEGER PRIMARY KEY,name TEXT NOT NULL,title TEXT NOT NULL,rule_version TEXT NOT NULL,UNIQUE(name,rule_version));" ++ "CREATE TABLE observation_idioms(observation_id INTEGER NOT NULL REFERENCES observations(id),idiom_id INTEGER NOT NULL REFERENCES idioms(id),reason TEXT NOT NULL,confidence TEXT NOT NULL,classification TEXT NOT NULL CHECK(classification IN('proven_equivalence', 'potential_alternative')),rule_version TEXT NOT NULL,PRIMARY KEY(observation_id,idiom_id,rule_version));" ++ "CREATE INDEX observation_idioms_idiom ON observation_idioms(idiom_id);";
+const migration_5 = "ALTER TABLE analysis_runs ADD COLUMN ruby_version TEXT;ALTER TABLE repositories ADD COLUMN cohort TEXT;";
 
 test "fresh migration stores versioned raw observations and provenance" {
     var db = try Database.open(std.testing.allocator, ":memory:");

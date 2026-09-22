@@ -19,6 +19,8 @@ pub const Filter = struct {
     prism_version: ?[]const u8 = null,
     classifier_version: ?[]const u8 = null,
     taxonomy_version: ?[]const u8 = null,
+    ruby_version: ?[]const u8 = null,
+    cohort: ?[]const u8 = null,
 
     pub fn toStorageQuery(self: Filter) storage.StatisticsQuery {
         return .{
@@ -30,6 +32,8 @@ pub const Filter = struct {
             .prism_version = self.prism_version,
             .classifier_version = self.classifier_version,
             .taxonomy_version = self.taxonomy_version,
+            .ruby_version = self.ruby_version,
+            .cohort = self.cohort,
         };
     }
 };
@@ -96,16 +100,46 @@ pub fn reportTopic(allocator: std.mem.Allocator, db: *storage.Database, topic_id
     };
 }
 
+pub const Examples = struct {
+    construct: []u8,
+    items: []storage.SourceObservation,
+    filter: Filter,
+    pub fn deinit(self: *Examples, allocator: std.mem.Allocator) void { allocator.free(self.construct); for (self.items) |*item| item.deinit(allocator); allocator.free(self.items); }
+};
+
+pub fn findExamples(allocator: std.mem.Allocator, db: *storage.Database, construct: []const u8, filter: Filter, limit: usize) Error!Examples {
+    return .{ .construct = try allocator.dupe(u8, construct), .items = db.findExamples(allocator, construct, filter.toStorageQuery(), limit) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else error.Sqlite, .filter = filter };
+}
+
 pub const RenderOptions = struct {
     json: bool = false,
+    markdown: bool = false,
 };
 
 pub const raw_syntax_note = "These figures are raw syntax frequencies from the current corpus; they describe how often each construct appears, not semantic equivalence.";
+
+pub fn renderExamples(allocator: std.mem.Allocator, writer: anytype, examples: Examples, options: RenderOptions) !void {
+    if (options.json) {
+        var output = std.Io.Writer.Allocating.init(allocator); defer output.deinit();
+        try output.writer.print("{{\"construct\":\"{s}\",\"examples\":[", .{examples.construct});
+        for (examples.items, 0..) |item, i| { if (i > 0) try output.writer.writeByte(','); try output.writer.print("{{\"repository\":\"{s}\",\"commit\":\"{s}\",\"file\":\"{s}\",\"line\":{d},\"column\":{d},\"start_offset\":{d},\"end_offset\":{d}}}", .{item.repository_origin,item.commit_sha,item.file_path,item.line,item.column,item.start_offset,item.end_offset}); }
+        try output.writer.writeAll("]}\n"); try writer.writeAll(output.written());
+    } else if (options.markdown) {
+        try writer.print("# Examples: `{s}`\n\nRepository | Pinned commit | File | Source range\n---|---|---|---\n", .{examples.construct});
+        for (examples.items) |item| try writer.print("{s} | `{s}` | `{s}` | `{d}:{d} (offsets {d}..{d})\n", .{item.repository_origin,item.commit_sha,item.file_path,item.line,item.column,item.start_offset,item.end_offset});
+    } else {
+        try writer.print("Examples for `{s}`\n", .{examples.construct});
+        for (examples.items) |item| try writer.print("{s}@{s} {s}:{d}:{d} offsets={d}..{d}\n", .{item.repository_origin,item.commit_sha,item.file_path,item.line,item.column,item.start_offset,item.end_offset});
+        if (examples.items.len == 0) try writer.writeAll("No matching examples.\n");
+    }
+}
 
 /// Render a comparison to the supplied writer.
 pub fn renderComparison(allocator: std.mem.Allocator, writer: anytype, comparison: Comparison, options: RenderOptions) !void {
     if (options.json) {
         try renderComparisonJson(allocator, writer, comparison);
+    } else if (options.markdown) {
+        try renderComparisonMarkdown(writer, comparison);
     } else {
         try renderComparisonTerminal(writer, comparison);
     }
@@ -115,9 +149,21 @@ pub fn renderComparison(allocator: std.mem.Allocator, writer: anytype, compariso
 pub fn renderTopic(allocator: std.mem.Allocator, writer: anytype, report: TopicReport, options: RenderOptions) !void {
     if (options.json) {
         try renderTopicJson(allocator, writer, report);
+    } else if (options.markdown) {
+        try renderTopicMarkdown(writer, report);
     } else {
         try renderTopicTerminal(writer, report);
     }
+}
+
+fn renderComparisonMarkdown(writer: anytype, comparison: Comparison) !void {
+    try writer.print("# Construct comparison\n\n{s}\n\n", .{raw_syntax_note});
+    if (comparison.statistics.len == 0) { try writer.writeAll("No constructs requested.\n"); return; }
+    const head = comparison.statistics[0];
+    try writer.print("- Denominator: {d} observations\n- Filter: ", .{head.denominator});
+    try renderFilter(writer, head.filters);
+    try writer.writeAll("\n| Construct | Count | Frequency | Projects |\n|---|---:|---:|---:|\n");
+    for (comparison.statistics) |stat| { var pct: [32]u8 = undefined; try writer.print("| `{s}` | {d} | {s} | {d} |\n", .{stat.construct, stat.count, formatPercentage(&pct, stat.percentage), stat.projects.len}); }
 }
 
 fn renderComparisonTerminal(writer: anytype, comparison: Comparison) !void {
@@ -153,6 +199,17 @@ fn renderComparisonTerminal(writer: anytype, comparison: Comparison) !void {
         const pct = formatPercentage(&pct_buffer, stat.percentage);
         try writer.print("{s:<12} {d:<8} {s:<10} {d}\n", .{ stat.construct, @as(usize, @intCast(stat.count)), pct, stat.projects.len });
     }
+}
+
+fn renderTopicMarkdown(writer: anytype, report: TopicReport) !void {
+    try writer.print("# {s}\n\n{s}\n\n", .{ report.title, raw_syntax_note });
+    if (report.statistics.len == 0) { try writer.writeAll("No constructs defined for this topic.\n"); return; }
+    const head = report.statistics[0];
+    try writer.print("- Denominator: {d} observations\n- Filter: ", .{head.denominator});
+    try renderFilter(writer, head.filters);
+    try writer.writeAll("\n| Construct | Count | Frequency | Projects |\n|---|---:|---:|---:|\n");
+    for (report.statistics) |stat| { var pct: [32]u8 = undefined; try writer.print("| `{s}` | {d} | {s} | {d} |\n", .{stat.construct, stat.count, formatPercentage(&pct, stat.percentage), stat.projects.len}); }
+    if (report.incomplete) try writer.writeAll("\n> Warning: at least one matching analysis run is incomplete.\n");
 }
 
 fn renderTopicTerminal(writer: anytype, report: TopicReport) !void {
@@ -208,6 +265,8 @@ fn renderFilter(writer: anytype, filters: storage.AppliedFilter) !void {
         .{ "prism_version", filters.prism_version },
         .{ "classifier_version", filters.classifier_version },
         .{ "taxonomy_version", filters.taxonomy_version },
+        .{ "ruby_version", filters.ruby_version },
+        .{ "cohort", filters.cohort },
     };
     inline for (pairs) |pair| {
         const name = pair.@"0";
@@ -286,6 +345,8 @@ fn renderFilterJson(writer: anytype, filter: Filter) !void {
         .{ "prism_version", filter.prism_version },
         .{ "classifier_version", filter.classifier_version },
         .{ "taxonomy_version", filter.taxonomy_version },
+        .{ "ruby_version", filter.ruby_version },
+        .{ "cohort", filter.cohort },
     };
     inline for (string_pairs) |pair| {
         const name = pair.@"0";
