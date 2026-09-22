@@ -36,6 +36,7 @@ test {
     std.testing.refAllDecls(reports);
     std.testing.refAllDecls(exercises);
     std.testing.refAllDecls(fx_spike);
+    std.testing.refAllDecls(agent.gateway);
 }
 
 pub const version = "0.1.0-dev";

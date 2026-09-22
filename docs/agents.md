@@ -21,3 +21,24 @@ rgp ask --agent fx "Explain ..."
 an unavailable or unknown adapter returns an error and suggests the offline
 commands. A future configured adapter must advertise capabilities before RGP
 uses streaming, tool calls, file access, or other optional features.
+
+
+## Gateway permission modes
+
+The RGP gateway owns authorization independently of adapter capabilities. Its
+safe default is `learn`:
+
+- `observe` permits read/analyze tools only.
+- `learn` permits lessons, exercises, submissions, and learner progress, but
+  never repository writes or shells.
+- `suggest` is read-only and cannot persist learner mutations.
+- `edit` permits repository writes only when the request carries explicit
+  approval; it does not permit unrestricted shells.
+- `agent` permits approved repository work and is the only mode that may use
+  an unrestricted shell.
+
+All repository paths are checked against the configured workspace boundary;
+`..` traversal and sibling prefixes are rejected. Cancellation is checked
+before tool execution, and exercise submissions are bounded by source, step,
+and output limits. These checks are implemented in `src/agent/gateway.zig`
+and covered by `zig build test`.
