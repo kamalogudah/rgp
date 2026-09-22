@@ -25,7 +25,7 @@ echo "[5/7] CLI smoke checks"
 
 echo "[6/7] learning and detector inventory"
 lesson_count=$(./zig-out/bin/rgp learn | awk '/^[0-9]+\./ { count += 1 } END { print count + 0 }')
-[[ "$lesson_count" -eq 10 ]] || { echo "release check: expected 10 lessons, found $lesson_count" >&2; exit 1; }
+[[ "$lesson_count" -eq 16 ]] || { echo "release check: expected 16 lessons, found $lesson_count" >&2; exit 1; }
 idioms=$(./zig-out/bin/rgp idioms fixtures/corpus/first_analyzer.rb --json)
 for idiom in collection_iteration fixed_iteration collection_transformation collection_filter aggregation; do
     grep -F "\"idiom_id\":\"$idiom\"" <<<"$idioms" >/dev/null || {

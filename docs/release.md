@@ -50,7 +50,7 @@ For a release-style build and smoke test, run `bash scripts/release-check.sh`.
 | 5+ detectors | `src/analysis/idioms.zig` has versioned source-aware rules; `scripts/release-check.sh` checks five detector IDs in JSON output. |
 | Taxonomy | `zig build test` validates the checked-in taxonomy and idiom mappings; JSON reports are golden-tested. |
 | Terminal and JSON output | CLI tests and the corpus gate cover terminal output plus `compare`/`report` JSON goldens. |
-| Ten lessons | `rgp learn` lists ten lessons; `scripts/release-check.sh` counts the ten entries. |
+| 16 lessons | `rgp learn` lists all taxonomy sections through real-world idioms; `scripts/release-check.sh` counts the 16 entries. |
 | Exercises and progress | `src/exercises.zig` provides deterministic syntax/static validation and records attempts in SQLite; lesson progress is persisted by `src/storage/sqlite.zig`. |
 | Beginner path with AI disabled | `rgp learn`, `analyze`, `report`, `compare`, and `idioms` have no AI/provider dependency; the complete regression gate runs offline. |
 
