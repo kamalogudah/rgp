@@ -4,12 +4,17 @@ const Io = std.Io;
 const storage = @import("../storage/sqlite.zig");
 const reports = @import("../reports/statistics.zig");
 const concepts = @import("../reports/concepts.zig");
+const repository_learning = @import("../repository_learning.zig");
 
 pub fn run(_: Io, allocator: std.mem.Allocator, args: []const []const u8, writer: *Io.Writer) !u8 {
     var project: ?[]const u8 = null;
     var compare_cohorts = std.ArrayList([]const u8).empty;
     defer compare_cohorts.deinit(allocator);
     var json = false;
+    var requested_concept: ?[]const u8 = null;
+    var learner_external: []const u8 = "default";
+    var session_key: []const u8 = "default";
+    var answer: ?[]const u8 = null;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
@@ -19,6 +24,30 @@ pub fn run(_: Io, allocator: std.mem.Allocator, args: []const []const u8, writer
         }
         if (std.mem.eql(u8, arg, "--json")) {
             json = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--concept")) {
+            i += 1;
+            if (i >= args.len) return 2;
+            requested_concept = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--learner")) {
+            i += 1;
+            if (i >= args.len) return 2;
+            learner_external = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--session")) {
+            i += 1;
+            if (i >= args.len) return 2;
+            session_key = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--answer")) {
+            i += 1;
+            if (i >= args.len) return 2;
+            answer = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--compare-cohort")) {
@@ -51,6 +80,28 @@ pub fn run(_: Io, allocator: std.mem.Allocator, args: []const []const u8, writer
         return 1;
     };
     defer map.deinit(allocator);
+    if (requested_concept) |requested| {
+        const pinned = try db.findExamples(allocator, requested, .{ .repository_origin = origin }, 1);
+        defer {
+            for (pinned) |*example| example.deinit(allocator);
+            allocator.free(pinned);
+        }
+        const source: ?storage.SourceObservation = if (pinned.len > 0) pinned[0] else null;
+        if (source == null) {
+            try writer.print("error: no pinned example found for concept `{s}`; choose an observed concept.\n", .{requested});
+            return 1;
+        }
+        var question = try repository_learning.generate(allocator, source.?, requested);
+        defer question.deinit(allocator);
+        const learner = try db.upsertLearner(learner_external, learner_external, .beginner);
+        const question_id = try repository_learning.persistQuestion(&db, learner, session_key, question);
+        try writer.print("Reading question {d}\n{s}\nSource: {s}@{s} {s}:{d}:{d} offsets={d}..{d}\n", .{ question_id, question.prompt, question.observation.repository_origin, question.observation.commit_sha, question.observation.file_path, question.observation.line, question.observation.column, question.observation.start_offset, question.observation.end_offset });
+        if (answer) |response| {
+            const accepted = try repository_learning.persistAnswer(&db, learner, session_key, question, response);
+            try writer.print("Answer: {s}\nEvidence: {s}\n", .{ if (accepted) "accepted" else "needs revision", question.expected_fact });
+        }
+        return 0;
+    }
     if (json) return renderJson(writer, map);
     try writer.print("Repository concept map: {s}\n", .{origin});
     try writer.writeAll("Evidence is limited to completed local observations; raw syntax is not semantic equivalence.\n\nObserved concepts\n");
@@ -118,4 +169,4 @@ fn renderJson(writer: *Io.Writer, map: concepts.Map) !u8 {
     return 0;
 }
 
-const usage = "\nUsage: rgp learn-repo <project-origin> [--compare-cohort <name>]... [--json]\n";
+const usage = "\nUsage: rgp learn-repo <project-origin> [--concept <name> --learner <id> --session <key> --answer <text>] [--compare-cohort <name>]... [--json]\n";

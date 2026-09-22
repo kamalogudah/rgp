@@ -29,6 +29,7 @@ pub const explain = @import("explain.zig");
 pub const recommendations = @import("recommendations.zig");
 pub const tutor = @import("tutor.zig");
 pub const exercises = @import("exercises.zig");
+pub const repository_learning = @import("repository_learning.zig");
 pub const agent = @import("agent/root.zig");
 pub const fx_spike = @import("agents/fx/spike.zig");
 
@@ -39,6 +40,7 @@ test {
     std.testing.refAllDecls(analysis);
     std.testing.refAllDecls(reports);
     std.testing.refAllDecls(exercises);
+    std.testing.refAllDecls(repository_learning);
     std.testing.refAllDecls(fx_spike);
     std.testing.refAllDecls(agent.gateway);
 }

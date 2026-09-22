@@ -30,3 +30,14 @@ zig build
 
 Both commands are offline. The report reads only completed local runs and
 retains commit SHAs and source offsets from the storage layer.
+
+## Guided reading
+
+After a repository has been ingested with `rgp analyze <path>`, start a deterministic, read-only walkthrough from its completed observations:
+
+```bash
+rgp learn-repo <origin> --concept map --learner ada --session hanami-map
+rgp learn-repo <origin> --concept map --learner ada --session hanami-map --answer "map transforms each item"
+```
+
+Questions include the repository origin, pinned commit, file path, line/column, and byte offsets. Answers are checked against the requested observed construct and accepted answers are stored as `repository_reading_answers` plus attributable `competency_evidence`. The walkthrough never writes repository source files.

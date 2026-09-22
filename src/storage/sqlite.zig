@@ -23,7 +23,7 @@ const ok = 0;
 const row = 100;
 const done = 101;
 const transient: ?*const anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
-pub const latest_schema_version = 12;
+pub const latest_schema_version = 13;
 
 pub const LearnerProfile = enum { beginner, intermediate, senior };
 pub const EvidenceDimension = enum { exposure, practice, demonstrated };
@@ -142,6 +142,32 @@ pub const SourceObservation = struct {
     }
 };
 
+pub const ReadingQuestion = struct {
+    id: i64,
+    session_id: i64,
+    question_key: []u8,
+    construct: []u8,
+    prompt: []u8,
+    expected_fact: []u8,
+    repository_origin: []u8,
+    commit_sha: []u8,
+    file_path: []u8,
+    line: i64,
+    column: i64,
+    start_offset: i64,
+    end_offset: i64,
+    validated: bool,
+    pub fn deinit(self: *ReadingQuestion, allocator: std.mem.Allocator) void {
+        allocator.free(self.question_key);
+        allocator.free(self.construct);
+        allocator.free(self.prompt);
+        allocator.free(self.expected_fact);
+        allocator.free(self.repository_origin);
+        allocator.free(self.commit_sha);
+        allocator.free(self.file_path);
+    }
+};
+
 pub const ProjectCount = struct { repository_id: i64, origin: []u8, count: i64 };
 
 pub const Statistic = struct {
@@ -208,6 +234,7 @@ pub const Database = struct {
         if (current < 10) try self.exec("BEGIN IMMEDIATE;" ++ migration_10 ++ "INSERT INTO schema_migrations VALUES(10);COMMIT;");
         if (current < 11) try self.exec("BEGIN IMMEDIATE;" ++ migration_11 ++ "INSERT INTO schema_migrations VALUES(11);COMMIT;");
         if (current < 12) try self.exec("BEGIN IMMEDIATE;" ++ migration_12 ++ "INSERT INTO schema_migrations VALUES(12);COMMIT;");
+        if (current < 13) try self.exec("BEGIN IMMEDIATE;" ++ migration_13 ++ "INSERT INTO schema_migrations VALUES(13);COMMIT;");
     }
     pub fn schemaVersion(self: *Database) !i64 {
         return self.one("SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", .{});
@@ -527,6 +554,28 @@ pub const Database = struct {
             return id;
         }
         return self.insert("INSERT INTO learning_sessions(learner_id,session_key) VALUES(?1,?2);", .{ learner_id, session_key });
+    }
+
+    pub fn startRepositoryReadingSession(self: *Database, learner_id: i64, session_key: []const u8, repository_origin: []const u8, commit_sha: []const u8) !i64 {
+        if (try self.oneOrNull("SELECT id FROM repository_reading_sessions WHERE learner_id=?1 AND session_key=?2;", .{ learner_id, session_key })) |id| {
+            try self.execute("UPDATE repository_reading_sessions SET repository_origin=?3,commit_sha=?4,resumed_at=unixepoch() WHERE id=?1;", .{ id, learner_id, repository_origin, commit_sha });
+            return id;
+        }
+        return self.insert("INSERT INTO repository_reading_sessions(learner_id,session_key,repository_origin,commit_sha) VALUES(?1,?2,?3,?4);", .{ learner_id, session_key, repository_origin, commit_sha });
+    }
+
+    pub fn saveReadingQuestion(self: *Database, session_id: i64, question_key: []const u8, construct: []const u8, prompt: []const u8, expected_fact: []const u8, observation: SourceObservation) !i64 {
+        if (try self.oneOrNull("SELECT id FROM repository_reading_questions WHERE session_id=?1 AND question_key=?2;", .{ session_id, question_key })) |id| return id;
+        return self.insert("INSERT INTO repository_reading_questions(session_id,question_key,construct,prompt,expected_fact,observation_id,repository_origin,commit_sha,file_path,line,column,start_offset,end_offset) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13);", .{ session_id, question_key, construct, prompt, expected_fact, observation.id, observation.repository_origin, observation.commit_sha, observation.file_path, observation.line, observation.column, observation.start_offset, observation.end_offset });
+    }
+
+    pub fn recordReadingAnswer(self: *Database, learner_id: i64, question_id: i64, answer: []const u8, accepted: bool, detail: []const u8) !i64 {
+        const value: i64 = if (accepted) 1 else 0;
+        if (try self.oneOrNull("SELECT id FROM repository_reading_answers WHERE question_id=?1 AND learner_id=?2;", .{ question_id, learner_id })) |id| {
+            try self.execute("UPDATE repository_reading_answers SET answer=?3,accepted=?4,detail=?5,updated_at=unixepoch() WHERE id=?1 AND learner_id=?2;", .{ id, learner_id, answer, value, detail });
+            return id;
+        }
+        return self.insert("INSERT INTO repository_reading_answers(question_id,learner_id,answer,accepted,detail) VALUES(?1,?2,?3,?4,?5);", .{ question_id, learner_id, answer, value, detail });
     }
 
     pub fn recordLessonProgress(self: *Database, learner_id: i64, lesson_key: []const u8, title: []const u8, status: []const u8, position: i64) !i64 {
@@ -914,6 +963,7 @@ const migration_9 = "ALTER TABLE exercise_attempts ADD COLUMN idiom_id TEXT;ALTE
 const migration_10 = "CREATE TABLE attempt_reveals(attempt_id INTEGER PRIMARY KEY REFERENCES exercise_attempts(id),level INTEGER NOT NULL CHECK(level BETWEEN 0 AND 4),updated_at INTEGER NOT NULL DEFAULT(unixepoch()));";
 const migration_11 = "CREATE TABLE agent_sessions(id INTEGER PRIMARY KEY,session_key TEXT NOT NULL UNIQUE,adapter TEXT NOT NULL,learner_id TEXT,topic TEXT,cwd TEXT,corpus_snapshot TEXT,status TEXT NOT NULL CHECK(status IN(\"active\",\"completed\",\"interrupted\")),generation INTEGER NOT NULL DEFAULT 0,started_at INTEGER NOT NULL DEFAULT(unixepoch()),resumed_at INTEGER);" ++ "CREATE TABLE agent_messages(id INTEGER PRIMARY KEY,session_id INTEGER NOT NULL REFERENCES agent_sessions(id),role TEXT NOT NULL CHECK(role IN(\"system\",\"user\",\"assistant\",\"tool\")),content TEXT NOT NULL,complete INTEGER NOT NULL CHECK(complete IN(0,1)),created_at INTEGER NOT NULL DEFAULT(unixepoch()));" ++ "CREATE TABLE agent_tool_calls(id INTEGER PRIMARY KEY,session_id INTEGER NOT NULL REFERENCES agent_sessions(id),tool TEXT NOT NULL,call_id TEXT NOT NULL,result_id TEXT,ok INTEGER NOT NULL,created_at INTEGER NOT NULL DEFAULT(unixepoch()));" ++ "CREATE INDEX agent_messages_lookup ON agent_messages(session_id,id);";
 const migration_12 = "ALTER TABLE exercises ADD COLUMN expected_behavior TEXT NOT NULL DEFAULT 'returns user.name for every user';ALTER TABLE exercises ADD COLUMN generation_provenance TEXT NOT NULL DEFAULT 'reviewed-static';ALTER TABLE exercises ADD COLUMN generation_status TEXT NOT NULL DEFAULT 'reviewed';";
+const migration_13 = "CREATE TABLE repository_reading_sessions(id INTEGER PRIMARY KEY,learner_id INTEGER NOT NULL REFERENCES learners(id),session_key TEXT NOT NULL,repository_origin TEXT NOT NULL,commit_sha TEXT NOT NULL,started_at INTEGER NOT NULL DEFAULT(unixepoch()),resumed_at INTEGER,UNIQUE(learner_id,session_key));" ++ "CREATE TABLE repository_reading_questions(id INTEGER PRIMARY KEY,session_id INTEGER NOT NULL REFERENCES repository_reading_sessions(id),question_key TEXT NOT NULL,construct TEXT NOT NULL,prompt TEXT NOT NULL,expected_fact TEXT NOT NULL,observation_id INTEGER NOT NULL REFERENCES observations(id),repository_origin TEXT NOT NULL,commit_sha TEXT NOT NULL,file_path TEXT NOT NULL,line INTEGER NOT NULL,column INTEGER NOT NULL,start_offset INTEGER NOT NULL,end_offset INTEGER NOT NULL,validated INTEGER NOT NULL DEFAULT 0,UNIQUE(session_id,question_key));" ++ "CREATE TABLE repository_reading_answers(id INTEGER PRIMARY KEY,question_id INTEGER NOT NULL REFERENCES repository_reading_questions(id),learner_id INTEGER NOT NULL REFERENCES learners(id),answer TEXT NOT NULL,accepted INTEGER NOT NULL,detail TEXT NOT NULL,created_at INTEGER NOT NULL DEFAULT(unixepoch()),updated_at INTEGER NOT NULL DEFAULT(unixepoch()),UNIQUE(question_id,learner_id));" ++ "CREATE INDEX repository_reading_questions_session ON repository_reading_questions(session_id);";
 const migration_7 = "CREATE TABLE learners(id INTEGER PRIMARY KEY,external_id TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,profile TEXT NOT NULL CHECK(profile IN(\"beginner\",\"intermediate\",\"senior\")),created_at INTEGER NOT NULL DEFAULT(unixepoch()),updated_at INTEGER NOT NULL DEFAULT(unixepoch()));" ++
     "CREATE TABLE learning_sessions(id INTEGER PRIMARY KEY,learner_id INTEGER NOT NULL REFERENCES learners(id),session_key TEXT NOT NULL,started_at INTEGER NOT NULL DEFAULT(unixepoch()),resumed_at INTEGER,UNIQUE(learner_id,session_key));" ++
     "CREATE TABLE lessons(id INTEGER PRIMARY KEY,key TEXT NOT NULL UNIQUE,title TEXT NOT NULL);" ++
