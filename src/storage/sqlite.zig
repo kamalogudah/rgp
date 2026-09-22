@@ -23,7 +23,7 @@ const ok = 0;
 const row = 100;
 const done = 101;
 const transient: ?*const anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
-pub const latest_schema_version = 10;
+pub const latest_schema_version = 11;
 
 pub const LearnerProfile = enum { beginner, intermediate, senior };
 pub const EvidenceDimension = enum { exposure, practice, demonstrated };
@@ -205,9 +205,36 @@ pub const Database = struct {
         if (current < 8) try self.exec("BEGIN IMMEDIATE;" ++ migration_8 ++ "INSERT INTO schema_migrations VALUES(8);COMMIT;");
         if (current < 9) try self.exec("BEGIN IMMEDIATE;" ++ migration_9 ++ "INSERT INTO schema_migrations VALUES(9);COMMIT;");
         if (current < 10) try self.exec("BEGIN IMMEDIATE;" ++ migration_10 ++ "INSERT INTO schema_migrations VALUES(10);COMMIT;");
+        if (current < 11) try self.exec("BEGIN IMMEDIATE;" ++ migration_11 ++ "INSERT INTO schema_migrations VALUES(11);COMMIT;");
     }
     pub fn schemaVersion(self: *Database) !i64 {
         return self.one("SELECT COALESCE(MAX(version), 0) FROM schema_migrations;", .{});
+    }
+
+    pub fn upsertAgentSession(self: *Database, key: []const u8, adapter: []const u8, learner_id: ?[]const u8, topic: ?[]const u8, cwd: ?[]const u8, corpus_snapshot: ?[]const u8) !i64 {
+        if (try self.oneOrNull("SELECT id FROM agent_sessions WHERE session_key=?1;", .{key})) |id| {
+            try self.execute("UPDATE agent_sessions SET adapter=?2,learner_id=?3,topic=?4,cwd=?5,corpus_snapshot=?6,status='active',resumed_at=unixepoch(),generation=generation+1 WHERE id=?1;", .{ id, adapter, learner_id, topic, cwd, corpus_snapshot });
+            return id;
+        }
+        return self.insert("INSERT INTO agent_sessions(session_key,adapter,learner_id,topic,cwd,corpus_snapshot,status,generation) VALUES(?1,?2,?3,?4,?5,?6,'active',0);", .{ key, adapter, learner_id, topic, cwd, corpus_snapshot });
+    }
+
+    pub fn appendAgentMessage(self: *Database, session_id: i64, role: []const u8, content: []const u8, complete: bool) !i64 {
+        const complete_value: i64 = if (complete) 1 else 0;
+        const safe = if (std.mem.indexOf(u8, content, "Bearer ") != null or std.mem.indexOf(u8, content, "api_key") != null or std.mem.indexOf(u8, content, "token=") != null) "[redacted credential]" else content;
+        return self.insert("INSERT INTO agent_messages(session_id,role,content,complete) VALUES(?1,?2,?3,?4);", .{ session_id, role, safe, complete_value });
+    }
+
+    pub fn setAgentStatus(self: *Database, session_id: i64, status: []const u8) !void {
+        try self.execute("UPDATE agent_sessions SET status=?2,resumed_at=unixepoch() WHERE id=?1;", .{ session_id, status });
+    }
+
+    pub fn agentSessionStatus(self: *Database, session_id: i64) ![]u8 {
+        return self.string("SELECT status FROM agent_sessions WHERE id=?1;", .{session_id});
+    }
+
+    pub fn agentMessageCount(self: *Database, session_id: i64) !i64 {
+        return self.one("SELECT COUNT(*) FROM agent_messages WHERE session_id=?1;", .{session_id});
     }
 
     pub fn addRepository(self: *Database, origin: []const u8) !i64 {
@@ -813,6 +840,7 @@ const migration_6 = "CREATE TABLE statistics_cache(cache_key TEXT PRIMARY KEY,de
 const migration_8 = "CREATE TABLE exercises(id INTEGER PRIMARY KEY,key TEXT NOT NULL UNIQUE,title TEXT NOT NULL,prompt TEXT NOT NULL,competency_key TEXT NOT NULL);" ++ "CREATE TABLE exercise_attempts(id INTEGER PRIMARY KEY,learner_id INTEGER NOT NULL REFERENCES learners(id),exercise_id INTEGER NOT NULL REFERENCES exercises(id),source TEXT NOT NULL,outcome TEXT NOT NULL,syntax_ok INTEGER NOT NULL,behavioral_check TEXT NOT NULL,feedback TEXT NOT NULL,deterministic INTEGER NOT NULL,source_sha256 TEXT NOT NULL,created_at INTEGER NOT NULL DEFAULT(unixepoch()),UNIQUE(learner_id,exercise_id,source_sha256));" ++ "CREATE INDEX exercise_attempts_lookup ON exercise_attempts(learner_id,exercise_id,created_at);";
 const migration_9 = "ALTER TABLE exercise_attempts ADD COLUMN idiom_id TEXT;ALTER TABLE exercise_attempts ADD COLUMN idiom_evidence TEXT NOT NULL DEFAULT 'none';ALTER TABLE exercise_attempts ADD COLUMN corpus_evidence TEXT NOT NULL DEFAULT 'no corpus evidence claimed';";
 const migration_10 = "CREATE TABLE attempt_reveals(attempt_id INTEGER PRIMARY KEY REFERENCES exercise_attempts(id),level INTEGER NOT NULL CHECK(level BETWEEN 0 AND 4),updated_at INTEGER NOT NULL DEFAULT(unixepoch()));";
+const migration_11 = "CREATE TABLE agent_sessions(id INTEGER PRIMARY KEY,session_key TEXT NOT NULL UNIQUE,adapter TEXT NOT NULL,learner_id TEXT,topic TEXT,cwd TEXT,corpus_snapshot TEXT,status TEXT NOT NULL CHECK(status IN(\"active\",\"completed\",\"interrupted\")),generation INTEGER NOT NULL DEFAULT 0,started_at INTEGER NOT NULL DEFAULT(unixepoch()),resumed_at INTEGER);" ++ "CREATE TABLE agent_messages(id INTEGER PRIMARY KEY,session_id INTEGER NOT NULL REFERENCES agent_sessions(id),role TEXT NOT NULL CHECK(role IN(\"system\",\"user\",\"assistant\",\"tool\")),content TEXT NOT NULL,complete INTEGER NOT NULL CHECK(complete IN(0,1)),created_at INTEGER NOT NULL DEFAULT(unixepoch()));" ++ "CREATE TABLE agent_tool_calls(id INTEGER PRIMARY KEY,session_id INTEGER NOT NULL REFERENCES agent_sessions(id),tool TEXT NOT NULL,call_id TEXT NOT NULL,result_id TEXT,ok INTEGER NOT NULL,created_at INTEGER NOT NULL DEFAULT(unixepoch()));" ++ "CREATE INDEX agent_messages_lookup ON agent_messages(session_id,id);";
 const migration_7 = "CREATE TABLE learners(id INTEGER PRIMARY KEY,external_id TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,profile TEXT NOT NULL CHECK(profile IN(\"beginner\",\"intermediate\",\"senior\")),created_at INTEGER NOT NULL DEFAULT(unixepoch()),updated_at INTEGER NOT NULL DEFAULT(unixepoch()));" ++
     "CREATE TABLE learning_sessions(id INTEGER PRIMARY KEY,learner_id INTEGER NOT NULL REFERENCES learners(id),session_key TEXT NOT NULL,started_at INTEGER NOT NULL DEFAULT(unixepoch()),resumed_at INTEGER,UNIQUE(learner_id,session_key));" ++
     "CREATE TABLE lessons(id INTEGER PRIMARY KEY,key TEXT NOT NULL UNIQUE,title TEXT NOT NULL);" ++
