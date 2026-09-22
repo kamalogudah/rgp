@@ -41,6 +41,10 @@ pub fn detectObservations(allocator: std.mem.Allocator, observations: []const ob
             try matches.append(allocator, .{ .observation_index = index, .idiom_id = "each_with_object", .reason = "each_with_object explicitly supplies a shared accumulator object", .confidence = "high", .classification = .proven_equivalence });
         } else if (std.mem.eql(u8, obs.construct, "select") or std.mem.eql(u8, obs.construct, "filter") or std.mem.eql(u8, obs.construct, "reject")) {
             try matches.append(allocator, .{ .observation_index = index, .idiom_id = "collection_filter", .reason = "select/filter/reject directly express collection filtering", .confidence = "medium", .classification = .potential_alternative });
+        } else if (std.mem.eql(u8, obs.construct, "compact")) {
+            try matches.append(allocator, .{ .observation_index = index, .idiom_id = "nil_removal", .reason = "compact removes nil elements from a collection", .confidence = "high", .classification = .proven_equivalence });
+        } else if (std.mem.eql(u8, obs.construct, "uniq")) {
+            try matches.append(allocator, .{ .observation_index = index, .idiom_id = "deduplication", .reason = "uniq removes duplicate elements from a collection", .confidence = "high", .classification = .proven_equivalence });
         } else if (std.mem.eql(u8, obs.construct, "reduce") or std.mem.eql(u8, obs.construct, "inject")) {
             try matches.append(allocator, .{ .observation_index = index, .idiom_id = "aggregation", .reason = "reduce/inject directly express accumulation", .confidence = "medium", .classification = .potential_alternative });
         } else if (std.mem.eql(u8, obs.construct, "each")) {

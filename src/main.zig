@@ -19,6 +19,9 @@ const usage =
     "  learn [lesson]           Follow the offline Ruby fundamentals path\n  practice [topic]          List practice exercises by topic or level\n" ++
     "  idioms <file>           Report conservative idiom matches\n" ++ "  agent <list|use|status> Manage coding-agent adapters (fx is optional)\n" ++
     "  ask [--agent name] <question> Ask through a selected coding agent\n" ++
+    "  explain [--level profile] file.rb[:20-35] Explain a source range offline\n" ++
+    "  recommend [--learner ID] [--level profile] Recommend evidence-backed lessons\n" ++
+    "  tutor --learner ID --attempt ID [--step step] Socratic exercise tutoring\n" ++
     "  corpus                  Manage the analyzed corpus\n" ++
     "  parse <file>            Parse a Ruby file and emit JSON\n" ++
     "\n" ++
@@ -83,6 +86,15 @@ fn run(args: []const []const u8, writer: *Io.Writer, io: Io, allocator: std.mem.
     }
     if (args.len > 0 and std.mem.eql(u8, args[0], "ask")) {
         return rgp.cli.ask.run(io, allocator, args[1..], writer);
+    }
+    if (args.len > 0 and std.mem.eql(u8, args[0], "explain")) {
+        return rgp.cli.explain.run(io, allocator, args[1..], writer);
+    }
+    if (args.len > 0 and std.mem.eql(u8, args[0], "recommend")) {
+        return rgp.cli.recommend.run(io, allocator, args[1..], writer);
+    }
+    if (args.len > 0 and std.mem.eql(u8, args[0], "tutor")) {
+        return rgp.cli.tutor.run(io, allocator, args[1..], writer);
     }
     if (args.len > 0 and std.mem.eql(u8, args[0], "agent")) {
         return rgp.cli.agent.run(io, allocator, args[1..], writer);

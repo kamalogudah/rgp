@@ -24,6 +24,9 @@ pub const corpus = @import("corpus/root.zig");
 /// CLI command adapters.
 pub const cli = @import("cli/root.zig");
 pub const learning = @import("learning.zig");
+pub const explain = @import("explain.zig");
+pub const recommendations = @import("recommendations.zig");
+pub const tutor = @import("tutor.zig");
 pub const exercises = @import("exercises.zig");
 pub const agent = @import("agent/root.zig");
 pub const fx_spike = @import("agents/fx/spike.zig");

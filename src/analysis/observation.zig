@@ -182,7 +182,7 @@ fn constructForKind(kind: []const u8) []const u8 {
 }
 
 fn trackedMethodName(name: []const u8) bool {
-    const names = [_][]const u8{ "each", "each_with_index", "each_with_object", "times", "map", "collect", "select", "filter", "reject", "reduce", "inject", "size", "length", "count", "new", "include", "extend", "prepend", "attr_reader", "attr_writer", "attr_accessor", "private", "protected", "public", "module_function", "raise", "fail", "retry", "super" };
+    const names = [_][]const u8{ "each", "each_with_index", "each_with_object", "times", "map", "collect", "select", "filter", "reject", "compact", "uniq", "reduce", "inject", "size", "length", "count", "new", "include", "extend", "prepend", "attr_reader", "attr_writer", "attr_accessor", "private", "protected", "public", "module_function", "raise", "fail", "retry", "super" };
     for (names) |n| if (std.mem.eql(u8, name, n)) return true;
     return false;
 }

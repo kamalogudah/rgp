@@ -30,6 +30,7 @@ pub const EvidenceDimension = enum { exposure, practice, demonstrated };
 
 pub const Learner = struct { id: i64, external_id: []u8, display_name: []u8, profile: LearnerProfile };
 pub const LessonProgress = struct { learner_id: i64, lesson_id: i64, status: []const u8, position: i64 = 0 };
+pub const CompetencyState = struct { key: []u8, exposure: i64, practice: i64, demonstrated: i64 };
 pub const CompetencyEvidence = struct {
     learner_id: i64,
     competency_id: i64,
@@ -459,6 +460,39 @@ pub const Database = struct {
     pub fn attemptReveal(self: *Database, learner_id: i64, attempt_id: i64) !i64 {
         if (try self.oneOrNull("SELECT id FROM exercise_attempts WHERE id=?1 AND learner_id=?2;", .{ attempt_id, learner_id }) == null) return error.AttemptNotFound;
         return (try self.oneOrNull("SELECT level FROM attempt_reveals WHERE attempt_id=?1;", .{attempt_id})) orelse 0;
+    }
+
+    /// Read-only learner state used by deterministic recommendation logic.
+    pub fn competencyStates(self: *Database, allocator: std.mem.Allocator, learner_id: i64) ![]CompetencyState {
+        const sql: [:0]const u8 = "SELECT c.key,lc.exposure_level,lc.practice_level,lc.demonstrated_level FROM learner_competencies lc JOIN competencies c ON c.id=lc.competency_id WHERE lc.learner_id=?1 ORDER BY c.key;";
+        const zsql = try allocator.dupeZ(u8, sql); defer allocator.free(zsql);
+        const statement = try self.prepare(zsql); defer _ = sqlite3_finalize(statement);
+        try bindAll(statement, .{learner_id});
+        var result = std.ArrayList(CompetencyState).empty;
+        errdefer { for (result.items) |state| allocator.free(state.key); result.deinit(allocator); }
+        while (true) {
+            const rc = sqlite3_step(statement);
+            if (rc == done) break;
+            if (rc != row) return error.Sqlite;
+            try result.append(allocator, .{ .key = try columnString(allocator, statement, 0), .exposure = sqlite3_column_int64(statement, 1), .practice = sqlite3_column_int64(statement, 2), .demonstrated = sqlite3_column_int64(statement, 3) });
+        }
+        return result.toOwnedSlice(allocator);
+    }
+
+    pub fn completedLessonKeys(self: *Database, allocator: std.mem.Allocator, learner_id: i64) ![][]u8 {
+        const sql: [:0]const u8 = "SELECT l.key FROM lesson_progress p JOIN lessons l ON l.id=p.lesson_id WHERE p.learner_id=?1 AND p.status='completed' ORDER BY l.id;";
+        const zsql = try allocator.dupeZ(u8, sql); defer allocator.free(zsql);
+        const statement = try self.prepare(zsql); defer _ = sqlite3_finalize(statement);
+        try bindAll(statement, .{learner_id});
+        var result = std.ArrayList([]u8).empty;
+        errdefer { for (result.items) |key| allocator.free(key); result.deinit(allocator); }
+        while (true) {
+            const rc = sqlite3_step(statement);
+            if (rc == done) break;
+            if (rc != row) return error.Sqlite;
+            try result.append(allocator, try columnString(allocator, statement, 0));
+        }
+        return result.toOwnedSlice(allocator);
     }
 
     pub fn count(self: *Database, comptime table: []const u8) !i64 {

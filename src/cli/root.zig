@@ -11,6 +11,9 @@ pub const practice = @import("practice.zig");
 pub const learn = @import("learn.zig");
 pub const agent = @import("agent.zig");
 pub const ask = @import("ask.zig");
+pub const explain = @import("explain.zig");
+pub const recommend = @import("recommend.zig");
+pub const tutor = @import("tutor.zig");
 
 test {
     std.testing.refAllDecls(corpus);
@@ -23,4 +26,7 @@ test {
     std.testing.refAllDecls(practice);
     std.testing.refAllDecls(agent);
     std.testing.refAllDecls(ask);
+    std.testing.refAllDecls(explain);
+    std.testing.refAllDecls(recommend);
+    std.testing.refAllDecls(tutor);
 }
