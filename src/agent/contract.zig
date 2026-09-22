@@ -10,11 +10,11 @@ pub const Capabilities = struct {
     bits: u32 = 0,
     pub fn with(values: []const Capability) Capabilities {
         var result = Capabilities{};
-        for (values) |value| result.bits |= @as(u32, 1) << @intFromEnum(value);
+        for (values) |value| result.bits |= @as(u32, 1) << @as(u5, @intCast(@intFromEnum(value)));
         return result;
     }
     pub fn supports(self: Capabilities, capability: Capability) bool {
-        return (self.bits & (@as(u32, 1) << @intFromEnum(capability))) != 0;
+        return (self.bits & (@as(u32, 1) << @as(u5, @intCast(@intFromEnum(capability))))) != 0;
     }
 };
 
