@@ -24,6 +24,7 @@ pub const corpus = @import("corpus/root.zig");
 /// CLI command adapters.
 pub const cli = @import("cli/root.zig");
 pub const learning = @import("learning.zig");
+pub const exercises = @import("exercises.zig");
 
 // Force analysis of the repository discovery module so its declarations and
 // tests are compiled and exercised by the deterministic test build.
@@ -31,6 +32,7 @@ test {
     std.testing.refAllDecls(repository);
     std.testing.refAllDecls(analysis);
     std.testing.refAllDecls(reports);
+    std.testing.refAllDecls(exercises);
 }
 
 pub const version = "0.1.0-dev";
