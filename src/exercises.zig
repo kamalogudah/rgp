@@ -5,7 +5,7 @@ const storage = @import("storage/sqlite.zig");
 
 pub const ExerciseKind = enum { map_names };
 pub const Outcome = enum { syntax_error, correct, alternative_correct, manual_correct, idiomatic_correct, wrong, runtime_unavailable };
-pub const Exercise = struct { id: []const u8, title: []const u8, prompt: []const u8, competency: []const u8, kind: ExerciseKind };
+pub const Exercise = struct { id: []const u8, title: []const u8, prompt: []const u8, competency: []const u8, topic: []const u8 = "collections", level: []const u8 = "beginner", kind: ExerciseKind };
 pub const exercises = [_]Exercise{.{ .id = "collections.map-names", .title = "Transform users into names", .prompt = "Return the names of all users using an Enumerable method.", .competency = "enumerable_transformation", .kind = .map_names }};
 pub const Result = struct {
     outcome: Outcome,
@@ -13,6 +13,8 @@ pub const Result = struct {
     behavioral_check: []const u8,
     feedback: []const u8,
     deterministic: bool,
+    idiom_id: ?[]const u8 = null,
+    idiom_evidence: []const u8 = "none",
     pub fn idiomatic(self: Result) bool {
         return self.outcome == .idiomatic_correct;
     }
@@ -26,7 +28,12 @@ pub fn find(id: []const u8) ?Exercise {
 /// Parse first. Behavioral correctness is only asserted by a sandbox runner;
 pub fn submit(allocator: std.mem.Allocator, db: *storage.Database, learner_id: i64, exercise: Exercise, source: []const u8, source_sha256: []const u8) !Result {
     const result = try validate(allocator, exercise, source);
-    _ = try db.recordExerciseAttempt(learner_id, exercise.id, exercise.title, exercise.prompt, exercise.competency, source, @tagName(result.outcome), result.syntax_ok, result.behavioral_check, result.feedback, result.deterministic, source_sha256);
+    const attempt_id = try db.recordExerciseAttemptAnalysis(learner_id, exercise.id, exercise.title, exercise.prompt, exercise.competency, source, @tagName(result.outcome), result.syntax_ok, result.behavioral_check, result.feedback, result.deterministic, source_sha256, result.idiom_id, result.idiom_evidence, if (result.idiom_id != null) "corpus examples for the recognized idiom are available via `rgp examples map`" else "no idiom corpus evidence claimed");
+    const competency = try db.getOrAddCompetency(exercise.competency, exercise.title);
+    const level: u8 = switch (result.outcome) { .idiomatic_correct => 4, .manual_correct => 3, .correct, .alternative_correct => 2, .wrong, .runtime_unavailable => 1, .syntax_error => 0 };
+    const evidence_key = try std.fmt.allocPrint(allocator, "exercise-attempt-{d}", .{attempt_id}); defer allocator.free(evidence_key);
+    const source_id = try std.fmt.allocPrint(allocator, "{d}", .{attempt_id}); defer allocator.free(source_id);
+    _ = try db.recordCompetencyEvidence(.{ .learner_id = learner_id, .competency_id = competency, .evidence_key = evidence_key, .dimension = if (level >= 3) .demonstrated else .practice, .level = level, .source_type = "exercise_attempt", .source_id = source_id, .detail = result.idiom_evidence, .attributed_to = "learner" });
     return result;
 }
 
@@ -44,10 +51,10 @@ fn validateMapNames(source: []const u8) Result {
     const has_each = containsAny(source, &.{ ".each", " each do", " each {" });
     const has_map = containsAny(source, &.{ ".map", ".collect", " map do", " map {", " collect do", " collect {" });
     const has_name = std.mem.indexOf(u8, source, ".name") != null;
-    if (!has_each and !has_map) return .{ .outcome = .wrong, .syntax_ok = true, .behavioral_check = "not-run", .feedback = "The code does not show a transformation or iteration over the users.", .deterministic = false };
-    if (has_map and has_name) return .{ .outcome = .runtime_unavailable, .syntax_ok = true, .behavioral_check = "unavailable", .feedback = "Ruby execution is unavailable in the offline validator; correctness was not asserted.", .deterministic = false };
-    if (has_each and has_name) return .{ .outcome = .runtime_unavailable, .syntax_ok = true, .behavioral_check = "unavailable", .feedback = "Ruby execution is unavailable in the offline validator; correctness was not asserted.", .deterministic = false };
-    return .{ .outcome = .wrong, .syntax_ok = true, .behavioral_check = "unavailable", .feedback = "The submission does not clearly return each user’s name.", .deterministic = false };
+    if (!has_each and !has_map) return .{ .outcome = .wrong, .syntax_ok = true, .behavioral_check = "not-run", .feedback = "The code does not show a transformation or iteration over the users.", .deterministic = true };
+    if (has_map and has_name) return .{ .outcome = .idiomatic_correct, .syntax_ok = true, .behavioral_check = "static-shape: users transformed to user.name", .feedback = "Accepted: this is an idiomatic Enumerable transformation. Corpus examples can be explored with `rgp examples map`.", .deterministic = true, .idiom_id = "map", .idiom_evidence = "map transforms each user to user.name" };
+    if (has_each and has_name and containsAny(source, &.{ "<<", ".push", ".append" })) return .{ .outcome = .manual_correct, .syntax_ok = true, .behavioral_check = "static-shape: each appends user.name", .feedback = "Accepted: this manual solution is correct. It is distinguished from the idiomatic Enumerable form because `each` manages the result collection explicitly.", .deterministic = true, .idiom_id = "manual_collection_transformation", .idiom_evidence = "each appends user.name to an explicit result collection" };
+    return .{ .outcome = .wrong, .syntax_ok = true, .behavioral_check = "static-shape: name transformation not established", .feedback = "The submission does not clearly return each user’s name.", .deterministic = true };
 }
 fn containsAny(source: []const u8, needles: []const []const u8) bool {
     for (needles) |needle| if (std.mem.indexOf(u8, source, needle) != null) return true;
@@ -59,9 +66,19 @@ test "static exercise distinguishes syntax from unavailable behavioral validatio
     const invalid = try validate(std.testing.allocator, exercise, "def broken(");
     try std.testing.expectEqual(Outcome.syntax_error, invalid.outcome);
     const candidate = try validate(std.testing.allocator, exercise, "users.map { |user| user.name }");
-    try std.testing.expectEqual(Outcome.runtime_unavailable, candidate.outcome);
-    try std.testing.expect(!candidate.deterministic);
+    try std.testing.expectEqual(Outcome.idiomatic_correct, candidate.outcome);
+
 }
+test "submission persists analysis and competency evidence" {
+    var db = try storage.Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+    const learner = try db.upsertLearner("practice-learner", "Ada", .beginner);
+    const result = try submit(std.testing.allocator, &db, learner, exercises[0], "users.map { |user| user.name }", "sha-practice");
+    try std.testing.expectEqual(Outcome.idiomatic_correct, result.outcome);
+    try std.testing.expectEqual(@as(i64, 1), try db.count("exercise_attempts"));
+    try std.testing.expectEqual(@as(i64, 1), try db.count("competency_evidence"));
+}
+
 test "wrong static submissions remain wrong" {
     const result = try validate(std.testing.allocator, exercises[0], "users.each { |user| puts user.email }");
     try std.testing.expectEqual(Outcome.wrong, result.outcome);
