@@ -104,6 +104,7 @@ pub fn run(io: Io, allocator: std.mem.Allocator, args: []const []const u8, write
                     return 2;
                 },
                 error.OutOfMemory => return error.OutOfMemory,
+                error.IncompatibleAnalyzers => unreachable,
                 error.Sqlite => {
                     try writer.writeAll("error: database query failed.\n");
                     return 1;

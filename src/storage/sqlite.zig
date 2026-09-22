@@ -170,6 +170,16 @@ pub const ReadingQuestion = struct {
 
 pub const ProjectCount = struct { repository_id: i64, origin: []u8, count: i64 };
 
+pub const CohortCount = struct {
+    cohort: []u8,
+    observations: i64,
+    projects: i64,
+
+    pub fn deinit(self: *CohortCount, allocator: std.mem.Allocator) void {
+        allocator.free(self.cohort);
+    }
+};
+
 pub const Statistic = struct {
     construct: []u8,
     snapshot_id: ?i64,
@@ -741,6 +751,31 @@ pub const Database = struct {
             });
         }
         return try result.toOwnedSlice(allocator);
+    }
+
+    /// Return the observation and project makeup of a snapshot, grouped by
+    /// repository cohort. This exposes denominator and membership changes.
+    pub fn queryCohorts(self: *Database, allocator: std.mem.Allocator, q: StatisticsQuery) ![]CohortCount {
+        const values = .{ q.snapshot_id, q.repository_id, q.repository_origin, q.classification, q.receiver_kind, q.rgp_version, q.prism_version, q.classifier_version, q.taxonomy_version, q.ruby_version, q.cohort };
+        const where = " FROM observations o JOIN analysis_runs r ON r.id=o.analysis_run_id JOIN files f ON f.id=o.file_id JOIN repositories p ON p.id=o.repository_id WHERE r.status='completed' AND (?1 IS NULL OR r.snapshot_id=?1) AND (?2 IS NULL OR o.repository_id=?2) AND (?3 IS NULL OR p.origin=?3) AND (?4 IS NULL OR f.classification=?4) AND (?5 IS NULL OR o.receiver_kind=?5) AND (?6 IS NULL OR r.rgp_version=?6) AND (?7 IS NULL OR r.prism_version=?7) AND (?8 IS NULL OR r.classifier_version=?8) AND (?9 IS NULL OR r.taxonomy_version=?9) AND (?10 IS NULL OR r.ruby_version=?10) AND (?11 IS NULL OR p.cohort=?11)";
+        const sql = "SELECT COALESCE(p.cohort, char(117,110,107,110,111,119,110,110)), COUNT(*), COUNT(DISTINCT p.id)" ++ where ++ " GROUP BY COALESCE(p.cohort, char(117,110,107,110,111,119,110,110)) ORDER BY 1";
+        const zsql = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(zsql);
+        const statement = try self.prepare(zsql);
+        defer _ = sqlite3_finalize(statement);
+        try bindAll(statement, values);
+        var cohorts = std.ArrayList(CohortCount).empty;
+        errdefer {
+            for (cohorts.items) |*item| item.deinit(allocator);
+            cohorts.deinit(allocator);
+        }
+        while (true) {
+            const rc = sqlite3_step(statement);
+            if (rc == done) break;
+            if (rc != row) return error.Sqlite;
+            try cohorts.append(allocator, .{ .cohort = try columnString(allocator, statement, 0), .observations = sqlite3_column_int64(statement, 1), .projects = sqlite3_column_int64(statement, 2) });
+        }
+        return try cohorts.toOwnedSlice(allocator);
     }
 
     /// Return constructs observed by completed runs under a repository/cohort filter, in stable order for reproducible concept maps.

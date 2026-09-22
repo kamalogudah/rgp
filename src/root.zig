@@ -31,6 +31,7 @@ pub const tutor = @import("tutor.zig");
 pub const exercises = @import("exercises.zig");
 pub const repository_learning = @import("repository_learning.zig");
 pub const agent = @import("agent/root.zig");
+pub const api = @import("api.zig");
 pub const fx_spike = @import("agents/fx/spike.zig");
 
 // Force analysis of the repository discovery module so its declarations and
@@ -43,6 +44,7 @@ test {
     std.testing.refAllDecls(repository_learning);
     std.testing.refAllDecls(fx_spike);
     std.testing.refAllDecls(agent.gateway);
+    std.testing.refAllDecls(api);
 }
 
 pub const version = "0.1.0-dev";

@@ -16,6 +16,8 @@ pub const Options = struct {
     classification: ?[]const u8 = null,
     receiver_kind: ?[]const u8 = null,
     project_origin: ?[]const u8 = null,
+    from_snapshot: ?i64 = null,
+    to_snapshot: ?i64 = null,
 };
 
 pub const ParseResult = union(enum) {
@@ -47,6 +49,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParseR
             i += 1;
             if (i >= args.len) return error.MissingValue;
             options.receiver_kind = args[i];
+        } else if (std.mem.eql(u8, arg, "--from-snapshot")) {
+            i += 1;
+            if (i >= args.len) return error.MissingValue;
+            options.from_snapshot = std.fmt.parseInt(i64, args[i], 10) catch return error.MissingValue;
+        } else if (std.mem.eql(u8, arg, "--to-snapshot")) {
+            i += 1;
+            if (i >= args.len) return error.MissingValue;
+            options.to_snapshot = std.fmt.parseInt(i64, args[i], 10) catch return error.MissingValue;
         } else if (std.mem.eql(u8, arg, "--project")) {
             i += 1;
             if (i >= args.len) return error.MissingValue;
@@ -65,7 +75,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParseR
 pub fn run(io: Io, allocator: std.mem.Allocator, args: []const []const u8, writer: *Io.Writer) !u8 {
     const parsed = parseArgs(allocator, args) catch |err| {
         const message = switch (err) {
-            error.UnknownOption => "error: unknown option; supported flags are `--json`, `--production`, `--test`, `--spec`, `--receiver-kind`, `--project`.\n",
+            error.UnknownOption => "error: unknown option; supported flags are `--json`, `--production`, `--test`, `--spec`, `--receiver-kind`, `--project`, `--from-snapshot`, `--to-snapshot`.\n",
             error.MissingValue => "error: option requires a value.\n",
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -93,11 +103,28 @@ pub fn run(io: Io, allocator: std.mem.Allocator, args: []const []const u8, write
             const origin = try resolveProjectOrigin(allocator, io, options.project_origin);
             defer if (origin) |o| allocator.free(o);
 
+            if ((options.from_snapshot == null) != (options.to_snapshot == null)) {
+                try writer.writeAll("error: --from-snapshot and --to-snapshot must be supplied together.\n");
+                return 2;
+            }
+
             const filter = reports.Filter{
                 .repository_origin = origin,
                 .classification = options.classification,
                 .receiver_kind = options.receiver_kind,
             };
+
+            if (options.from_snapshot) |from_snapshot| {
+                var historical = reports.compareSnapshots(allocator, &db, options.constructs, filter, from_snapshot, options.to_snapshot.?) catch |err| switch (err) {
+                    error.IncompatibleAnalyzers => { try writer.writeAll("error: snapshots use incompatible classifier or taxonomy versions; reanalyze both snapshots with the same analyzer versions before comparing.\n"); return 2; },
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.Sqlite => { try writer.writeAll("error: historical snapshot query failed.\n"); return 1; },
+                    else => return err,
+                };
+                defer historical.deinit(allocator);
+                try reports.renderSnapshotComparison(writer, historical, options.json);
+                return 0;
+            }
 
             var comparison = reports.compare(allocator, &db, options.constructs, filter) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
@@ -106,6 +133,7 @@ pub fn run(io: Io, allocator: std.mem.Allocator, args: []const []const u8, write
                     return 1;
                 },
                 error.UnknownTopic => unreachable,
+                error.IncompatibleAnalyzers => unreachable,
             };
             defer comparison.deinit(allocator);
 
@@ -119,6 +147,7 @@ const compare_usage =
     "\nCompare usage:\n" ++
     "  rgp compare <construct>... [--json] [--production] [--test] [--spec]\n" ++
     "                             [--receiver-kind <kind>] [--project <origin>]\n" ++
+    "                             [--from-snapshot <id> --to-snapshot <id>]\n" ++
     "\n" ++
     "Examples:\n" ++
     "  rgp compare size count length\n" ++

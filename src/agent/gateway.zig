@@ -9,6 +9,7 @@ const traversal = @import("../prism/traversal.zig");
 const learning = @import("../learning.zig");
 const exercises = @import("../exercises.zig");
 const storage = @import("../storage/sqlite.zig");
+const reports = @import("../reports/statistics.zig");
 
 pub const schema_version = "rgp.tools.v1";
 pub const provenance_version = "rgp.gateway.v1";
@@ -237,7 +238,7 @@ pub const Gateway = struct {
         var output = std.Io.Writer.Allocating.init(self.allocator);
         defer output.deinit();
         self.writeOutput(tool, parsed.value.object, &output.writer) catch |err| {
-            const code: ErrorCode = if (err == error.NotFound) .not_found else if (err == error.DatabaseRequired) .database_required else .execution_failed;
+            const code: ErrorCode = if (err == error.NotFound or err == error.UnknownTopic) .not_found else if (err == error.DatabaseRequired) .database_required else if (err == error.InvalidInput) .invalid_input else .execution_failed;
             return self.failure(request.tool, code, @errorName(err), request.input);
         };
         return self.success(request.tool, request.input, output.written());
@@ -263,7 +264,12 @@ pub const Gateway = struct {
             },
             .submit_exercise => try self.submitExercise(object, writer),
             .record_progress => try self.recordProgress(object, writer),
-            .get_stats, .compare, .find_examples, .get_construct, .get_idiom, .get_topic, .analyze_file, .analyze_repository, .get_progress => {
+            .get_stats => try self.writeStats(object, writer),
+            .compare => try self.writeCompare(object, writer),
+            .find_examples => try self.writeExamples(object, writer),
+            .get_topic => try self.writeTopic(object, writer),
+            .get_progress => try self.writeProgress(object, writer),
+            .get_construct, .get_idiom, .analyze_file, .analyze_repository => {
                 // These operations are intentionally wired through the same
                 // validated gateway now; their domain-specific projections
                 // require a configured database and are added without making
@@ -272,6 +278,63 @@ pub const Gateway = struct {
                 try writer.writeAll("{\"status\":\"accepted\",\"database\":true}");
             },
         }
+    }
+
+    fn writeProgress(self: *Gateway, object: std.json.ObjectMap, writer: anytype) !void {
+        const db = self.db orelse return error.DatabaseRequired;
+        const learner = integerField(object, "learner_id") orelse return error.InvalidInput;
+        const states = try db.competencyStates(self.allocator, learner);
+        defer { for (states) |state| self.allocator.free(state.key); self.allocator.free(states); }
+        const completed = try db.completedLessonKeys(self.allocator, learner);
+        defer { for (completed) |key| self.allocator.free(key); self.allocator.free(completed); }
+        try writer.print("{{\"learner_id\":{d},\"competencies\":[", .{learner});
+        for (states, 0..) |state, i| { if (i > 0) try writer.writeByte(','); try writer.print("{{\"key\":\"{s}\",\"exposure\":{d},\"practice\":{d},\"demonstrated\":{d}}}", .{ state.key, state.exposure, state.practice, state.demonstrated }); }
+        try writer.writeAll("],\"completed_lessons\":[");
+        for (completed, 0..) |key, i| { if (i > 0) try writer.writeByte(','); try writer.print("\"{s}\"", .{key}); }
+        try writer.writeAll("]}");
+    }
+
+    fn writeStats(self: *Gateway, object: std.json.ObjectMap, writer: anytype) !void {
+        const db = self.db orelse return error.DatabaseRequired;
+        const construct = stringField(object, "construct") orelse return error.InvalidInput;
+        var filter = reports.Filter{};
+        if (integerField(object, "snapshot_id")) |snapshot| filter.snapshot_id = snapshot;
+        var comparison = try reports.compare(self.allocator, db, &.{construct}, filter);
+        defer comparison.deinit(self.allocator);
+        try reports.renderComparison(self.allocator, writer, comparison, .{ .json = true });
+    }
+
+    fn writeTopic(self: *Gateway, object: std.json.ObjectMap, writer: anytype) !void {
+        const db = self.db orelse return error.DatabaseRequired;
+        const topic = stringField(object, "id") orelse return error.InvalidInput;
+        var report = try reports.reportTopic(self.allocator, db, topic, .{});
+        defer report.deinit(self.allocator);
+        try reports.renderTopic(self.allocator, writer, report, .{ .json = true });
+    }
+
+    fn writeExamples(self: *Gateway, object: std.json.ObjectMap, writer: anytype) !void {
+        const db = self.db orelse return error.DatabaseRequired;
+        const construct = stringField(object, "construct") orelse return error.InvalidInput;
+        const requested = integerField(object, "limit") orelse 20;
+        if (requested < 1 or requested > 100) return error.InvalidInput;
+        var examples = try reports.findExamples(self.allocator, db, construct, .{}, (@intCast(requested)));
+        defer examples.deinit(self.allocator);
+        try reports.renderExamples(self.allocator, writer, examples, .{ .json = true });
+    }
+
+    fn writeCompare(self: *Gateway, object: std.json.ObjectMap, writer: anytype) !void {
+        const db = self.db orelse return error.DatabaseRequired;
+        const values = object.get("constructs") orelse return error.InvalidInput;
+        if (values != .array or values.array.items.len == 0 or values.array.items.len > 50) return error.InvalidInput;
+        var constructs = std.ArrayList([]const u8).empty;
+        defer constructs.deinit(self.allocator);
+        for (values.array.items) |value| {
+            if (value != .string or value.string.len == 0) return error.InvalidInput;
+            try constructs.append(self.allocator, value.string);
+        }
+        var comparison = try reports.compare(self.allocator, db, constructs.items, .{});
+        defer comparison.deinit(self.allocator);
+        try reports.renderComparison(self.allocator, writer, comparison, .{ .json = true });
     }
 
     fn generateExercise(self: *Gateway, object: std.json.ObjectMap, writer: anytype) !void {
@@ -360,7 +423,9 @@ fn validateInput(tool: Tool, object: std.json.ObjectMap) ?[]const u8 {
         .get_progress => &.{"learner_id"},
         .analyze_file => &.{ "path", "source" },
         .analyze_repository => &.{ "path", "origin", "commit_sha" },
-        .get_stats, .compare, .find_examples => &.{},
+        .get_stats => &.{},
+        .compare => &.{"constructs"},
+        .find_examples => &.{"construct"},
     };
     for (required) |key| if (object.get(key) == null) return key;
     const string_required: []const []const u8 = switch (tool) {
@@ -517,4 +582,22 @@ test "generated exercise gateway rejects unsupported contracts and returns revie
     try std.testing.expect(response.ok);
     try std.testing.expect(std.mem.indexOf(u8, response.output, "\"accepted\":false") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.output, "reviewed-static") != null);
+}
+
+
+test "gateway report operation uses the same provenance path as compare" {
+    var db = try storage.Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+    const repo = try db.addRepository("api-fixture");
+    const commit = try db.addCommit(repo, "api-sha");
+    const file = try db.addFile(commit, "lib/a.rb", "hash");
+    const construct = try db.addConstruct("map");
+    _ = try db.persistCompleted(.{ .repository_id = repo, .commit_id = commit, .rgp_version = "r", .prism_version = "p", .classifier_version = "c", .taxonomy_version = "t" }, &.{.{ .repository_id = repo, .commit_id = commit, .file_id = file, .start_offset = 0, .end_offset = 3, .line = 1, .column = 1, .node_kind = "PM_CALL_NODE", .raw_json = "{}", .construct_id = construct }});
+    var gateway = Gateway.init(std.testing.allocator, &db);
+    defer gateway.deinit();
+    var response = try gateway.dispatch(.{ .tool = "rgp.get_stats", .input = "{\"construct\":\"map\"}" });
+    defer response.deinit(std.testing.allocator);
+    try std.testing.expect(response.ok);
+    try std.testing.expect(std.mem.indexOf(u8, response.output, "\"count\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response.output, "\"classifier_version\":\"c\"") != null);
 }

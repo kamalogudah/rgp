@@ -50,6 +50,48 @@ pub const Comparison = struct {
     }
 };
 
+pub const CohortDelta = struct {
+    cohort: []u8,
+    from_observations: i64,
+    to_observations: i64,
+    from_projects: i64,
+    to_projects: i64,
+
+    pub fn deinit(self: *CohortDelta, allocator: std.mem.Allocator) void {
+        allocator.free(self.cohort);
+    }
+};
+
+pub const HistoricalChange = struct {
+    construct: []u8,
+    from_count: i64,
+    to_count: i64,
+    from_denominator: i64,
+    to_denominator: i64,
+    from_percentage: ?f64,
+    to_percentage: ?f64,
+    absolute_change: i64,
+    normalized_change: ?f64,
+
+    pub fn deinit(self: *HistoricalChange, allocator: std.mem.Allocator) void {
+        allocator.free(self.construct);
+    }
+};
+
+pub const SnapshotComparison = struct {
+    from_snapshot: i64,
+    to_snapshot: i64,
+    changes: []HistoricalChange,
+    cohorts: []CohortDelta,
+
+    pub fn deinit(self: *SnapshotComparison, allocator: std.mem.Allocator) void {
+        for (self.changes) |*change| change.deinit(allocator);
+        allocator.free(self.changes);
+        for (self.cohorts) |*cohort| cohort.deinit(allocator);
+        allocator.free(self.cohorts);
+    }
+};
+
 pub const TopicReport = struct {
     topic_id: []u8,
     title: []u8,
@@ -70,6 +112,7 @@ pub const Error = error{
     OutOfMemory,
     Sqlite,
     UnknownTopic,
+    IncompatibleAnalyzers,
 };
 
 /// Compare a set of constructs under a single reproducible filter.
@@ -78,6 +121,45 @@ pub fn compare(allocator: std.mem.Allocator, db: *storage.Database, constructs: 
     const statistics = try db.queryStatistics(allocator, constructs, q);
     const incomplete = try db.hasIncompleteRuns(q);
     return .{ .filter = filter, .statistics = statistics, .incomplete = incomplete };
+}
+
+/// Compare two pinned snapshots. Counts are absolute; normalized changes are
+/// percentage-point changes against each snapshot's own denominator.
+pub fn compareSnapshots(allocator: std.mem.Allocator, db: *storage.Database, constructs: []const []const u8, filter: Filter, from_snapshot: i64, to_snapshot: i64) Error!SnapshotComparison {
+    var from_filter = filter;
+    from_filter.snapshot_id = from_snapshot;
+    var to_filter = filter;
+    to_filter.snapshot_id = to_snapshot;
+    const from_stats = try db.queryStatistics(allocator, constructs, from_filter.toStorageQuery());
+    defer { for (from_stats) |*stat| stat.deinit(allocator); allocator.free(from_stats); }
+    const to_stats = try db.queryStatistics(allocator, constructs, to_filter.toStorageQuery());
+    defer { for (to_stats) |*stat| stat.deinit(allocator); allocator.free(to_stats); }
+    if (from_stats.len != to_stats.len) return error.Sqlite;
+    for (from_stats, to_stats) |before, after| {
+        if (!std.mem.eql(u8, before.classifier_version, after.classifier_version) or !std.mem.eql(u8, before.taxonomy_version, after.taxonomy_version)) return error.IncompatibleAnalyzers;
+    }
+    var changes = try allocator.alloc(HistoricalChange, constructs.len);
+    errdefer allocator.free(changes);
+    for (from_stats, to_stats, 0..) |before, after, i| {
+        changes[i] = .{ .construct = try allocator.dupe(u8, constructs[i]), .from_count = before.count, .to_count = after.count, .from_denominator = before.denominator, .to_denominator = after.denominator, .from_percentage = before.percentage, .to_percentage = after.percentage, .absolute_change = after.count - before.count, .normalized_change = if (before.percentage != null and after.percentage != null) after.percentage.? - before.percentage.? else null };
+    }
+    const from_cohorts = try db.queryCohorts(allocator, from_filter.toStorageQuery());
+    defer { for (from_cohorts) |*cohort| cohort.deinit(allocator); allocator.free(from_cohorts); }
+    const to_cohorts = try db.queryCohorts(allocator, to_filter.toStorageQuery());
+    defer { for (to_cohorts) |*cohort| cohort.deinit(allocator); allocator.free(to_cohorts); }
+    var cohorts = std.ArrayList(CohortDelta).empty;
+    errdefer { for (cohorts.items) |*cohort| cohort.deinit(allocator); cohorts.deinit(allocator); }
+    for (from_cohorts) |before| {
+        var found = false;
+        for (to_cohorts) |after| if (std.mem.eql(u8, before.cohort, after.cohort)) { try cohorts.append(allocator, .{ .cohort = try allocator.dupe(u8, before.cohort), .from_observations = before.observations, .to_observations = after.observations, .from_projects = before.projects, .to_projects = after.projects }); found = true; break; };
+        if (!found) try cohorts.append(allocator, .{ .cohort = try allocator.dupe(u8, before.cohort), .from_observations = before.observations, .to_observations = 0, .from_projects = before.projects, .to_projects = 0 });
+    }
+    for (to_cohorts) |after| {
+        var found = false;
+        for (from_cohorts) |before| if (std.mem.eql(u8, before.cohort, after.cohort)) { found = true; break; };
+        if (!found) try cohorts.append(allocator, .{ .cohort = try allocator.dupe(u8, after.cohort), .from_observations = 0, .to_observations = after.observations, .from_projects = 0, .to_projects = after.projects });
+    }
+    return .{ .from_snapshot = from_snapshot, .to_snapshot = to_snapshot, .changes = changes, .cohorts = try cohorts.toOwnedSlice(allocator) };
 }
 
 /// Report on an educational topic from `taxonomy.toml`.
@@ -616,4 +698,25 @@ test "golden report json output covers empty dataset" {
         "{\"construct\":\"case\",\"snapshot_id\":null,\"rgp_version\":\"unknown\",\"prism_version\":\"unknown\"," ++
         "\"classifier_version\":\"unknown\",\"taxonomy_version\":\"unknown\",\"denominator\":0,\"count\":0,\"percentage\":null,\"projects\":[]}]}\n";
     try std.testing.expectEqualStrings(expected, output.written());
+}
+
+
+pub fn renderSnapshotComparison(writer: anytype, comparison: SnapshotComparison, json: bool) !void {
+    if (json) {
+        try writer.print("{{\"from_snapshot\":{d},\"to_snapshot\":{d},\"changes\":[", .{ comparison.from_snapshot, comparison.to_snapshot });
+        for (comparison.changes, 0..) |change, i| {
+            if (i > 0) try writer.writeByte(',');
+            try writer.print("{{\"construct\":\"{s}\",\"absolute_change\":{d},\"normalized_change\":", .{ change.construct, change.absolute_change });
+            if (change.normalized_change) |value| try writer.print("{d:.6}", .{value}) else try writer.writeAll("null");
+            try writer.writeAll("}");
+        }
+        try writer.writeAll("]}\n");
+    } else {
+        try writer.print("Historical comparison: snapshot {d} -> {d}\n", .{ comparison.from_snapshot, comparison.to_snapshot });
+        for (comparison.changes) |change| {
+            if (change.normalized_change) |value| try writer.print("{s}: absolute {d}, normalized {d:.2} percentage points\n", .{ change.construct, change.absolute_change, value }) else try writer.print("{s}: absolute {d}, normalized unavailable\n", .{ change.construct, change.absolute_change });
+        }
+        try writer.writeAll("Cohort composition (observations/projects):\n");
+        for (comparison.cohorts) |cohort| try writer.print("{s}: {d}/{d} -> {d}/{d}\n", .{ cohort.cohort, cohort.from_observations, cohort.from_projects, cohort.to_observations, cohort.to_projects });
+    }
 }

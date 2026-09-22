@@ -41,3 +41,14 @@ rgp learn-repo <origin> --concept map --learner ada --session hanami-map --answe
 ```
 
 Questions include the repository origin, pinned commit, file path, line/column, and byte offsets. Answers are checked against the requested observed construct and accepted answers are stored as `repository_reading_answers` plus attributable `competency_evidence`. The walkthrough never writes repository source files.
+
+
+## Historical snapshot comparisons
+
+Compare pinned analysis snapshots with raw count changes and denominator-normalized percentage-point changes:
+
+```bash
+rgp compare each for --from-snapshot 1 --to-snapshot 2 --json
+```
+
+The result reports observation and project composition by cohort, exposing corpus membership and denominator changes. Comparisons reject classifier or taxonomy version mismatches; reanalyze both pinned snapshots with the same analyzer versions before retrying.
