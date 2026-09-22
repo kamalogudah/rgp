@@ -3,7 +3,7 @@
 const std = @import("std");
 
 pub const SessionId = u64;
-pub const AdapterError = error{ UnsupportedCapability, SessionNotFound, Cancelled, NotConfigured, InvalidRequest };
+pub const AdapterError = error{ UnsupportedCapability, SessionNotFound, Cancelled, NotConfigured, InvalidRequest, FxNotFound, FxNotAuthenticated, ProtocolError, ProcessExited };
 pub const Capability = enum(u8) { chat, streaming, tool_calling, sessions, resume_session, file_read, file_write, shell, permissions, subagents, skills, mcp, acp, context_compaction, local_models };
 
 pub const Capabilities = struct {
@@ -18,10 +18,10 @@ pub const Capabilities = struct {
     }
 };
 
-pub const SessionConfig = struct { learner_id: ?[]const u8 = null, topic: ?[]const u8 = null, model: ?[]const u8 = null };
+pub const SessionConfig = struct { learner_id: ?[]const u8 = null, topic: ?[]const u8 = null, model: ?[]const u8 = null, cwd: ?[]const u8 = null };
 pub const AgentRequest = struct { text: []const u8, session_id: ?SessionId = null, require: ?Capability = null };
 pub const Response = struct { text: []const u8, session_id: SessionId, complete: bool = true };
-pub const StreamEvent = union(enum) { text: []const u8, completed: Response, cancelled, error_message: []const u8 };
+pub const StreamEvent = union(enum) { text: []const u8, tool_update: struct { name: []const u8, status: []const u8 }, completed: Response, cancelled, error_message: []const u8 };
 pub const StreamSink = *const fn (*anyopaque, StreamEvent) anyerror!void;
 
 pub const CodingAgent = struct {

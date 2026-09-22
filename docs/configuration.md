@@ -141,3 +141,44 @@ zig fmt --check src build.zig
 zig build
 zig build test
 ```
+
+
+## Coding-agent provider configuration
+
+The optional fx adapter is a process boundary. The core analyzer, lessons,
+reports, and corpus commands do not start fx and do not require credentials or
+network access.
+
+~~~toml
+[agent]
+adapter = "fx"
+
+[agents.fx]
+command = "fx"
+
+[agents.fx.provider]
+kind = "inherited"          # inherited | hosted | openai_compatible | local
+name = "provider-label"     # descriptive only
+endpoint = "http://127.0.0.1:1234/v1"
+model = "model-name"
+auth_env = "FX_AUTH_TOKEN"  # variable name only; never its value
+~~~
+
+Authentication is owned by fx and its selected provider. RGP never reads,
+stores, or forwards the token named by auth_env; configure and authenticate
+fx using its own documented provider flow. Hosted providers use saved fx
+credentials. Local or OpenAI-compatible providers use the configured
+endpoint/model and can omit authentication when the endpoint allows it.
+
+Failure behavior is scoped to the adapter: a missing executable returns
+FxNotFound, an authentication/credential ACP error returns FxNotAuthenticated,
+and malformed or incompatible ACP traffic returns ProtocolError. The adapter
+terminates failed processes and clears session state. Offline commands continue
+to work in all of these cases.
+
+The reproducible offline checks are:
+
+~~~sh
+zig fmt --check src build.zig
+zig build test
+~~~
