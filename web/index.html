@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Learn Ruby from how Ruby is actually written.">
+    <title>RGP — Ruby: The Good Parts</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#learn" aria-label="RGP home">
+        <span class="brand-mark" aria-hidden="true">R</span>
+        <span><strong>RGP</strong><small>Ruby: The Good Parts</small></span>
+      </a>
+      <nav class="primary-nav" aria-label="Primary navigation">
+        <a href="#learn" data-route="learn">Learn</a>
+        <a href="#explore" data-route="explore">Explore</a>
+        <a href="#practice" data-route="practice">Practice</a>
+        <a href="#explain" data-route="explain">Explain</a>
+        <a href="#corpus" data-route="corpus">Corpus</a>
+        <a href="#progress" data-route="progress">Progress</a>
+      </nav>
+    </header>
+
+    <main id="app" tabindex="-1">
+      <div class="loading" aria-live="polite">Loading RGP…</div>
+    </main>
+
+    <footer class="site-footer">
+      <span>Evidence-backed Ruby learning</span>
+      <span class="provenance" data-provenance>Offline core · deterministic facts</span>
+    </footer>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
