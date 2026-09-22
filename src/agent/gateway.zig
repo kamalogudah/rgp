@@ -437,6 +437,28 @@ test "parse and exercise reads are deterministic gateway tools" {
     try std.testing.expect(exercise.ok);
 }
 
+test "missing and fabricated evidence cannot be treated as a statistic" {
+    var db = try storage.Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+    var gateway = Gateway.init(std.testing.allocator, null);
+    defer gateway.deinit();
+    var missing = try gateway.dispatch(.{ .tool = "rgp.get_stats", .input = "{}" });
+    defer missing.deinit(std.testing.allocator);
+    try std.testing.expect(!missing.ok);
+    try std.testing.expectEqual(ErrorCode.database_required, missing.error_code.?);
+
+    var unavailable = try gateway.dispatch(.{ .tool = "rgp.get_stats", .input = "{\"construct\":\"map\"}" });
+    defer unavailable.deinit(std.testing.allocator);
+    try std.testing.expect(!unavailable.ok);
+    try std.testing.expectEqual(ErrorCode.database_required, unavailable.error_code.?);
+    try std.testing.expectEqualStrings("{}", unavailable.output);
+
+    var fabricated = try gateway.dispatch(.{ .tool = "rgp.made_up_stats", .input = "{}" });
+    defer fabricated.deinit(std.testing.allocator);
+    try std.testing.expect(!fabricated.ok);
+    try std.testing.expectEqual(ErrorCode.unknown_tool, fabricated.error_code.?);
+}
+
 test "permission modes reject learner mutations and require edit approval" {
     var gateway = Gateway.init(std.testing.allocator, null);
     defer gateway.deinit();
