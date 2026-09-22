@@ -134,6 +134,7 @@ test "section 35 commands run end to end" {
         &.{ "compare", "block" },
         &.{ "report", "conditionals" },
         &.{ "report", "collections" },
+        &.{ "report", "loops-and-iteration" },
     };
 
     for (commands) |args| {

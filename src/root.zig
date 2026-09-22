@@ -18,6 +18,7 @@ pub const repository = @import("repository/discovery.zig");
 pub const analysis = @import("analysis/root.zig");
 /// Reproducible statistics and provenance rendering.
 pub const reports = @import("reports/statistics.zig");
+pub const taxonomy = @import("config/taxonomy.zig");
 /// Corpus manifest and snapshot materialization.
 pub const corpus = @import("corpus/root.zig");
 /// CLI command adapters.

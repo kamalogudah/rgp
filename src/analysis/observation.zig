@@ -171,11 +171,18 @@ fn constructForKind(kind: []const u8) []const u8 {
     if (std.mem.eql(u8, kind, "PM_MODULE_NODE")) return "module";
     if (std.mem.eql(u8, kind, "PM_BLOCK_NODE")) return "block";
     if (std.mem.eql(u8, kind, "PM_RESCUE_NODE")) return "rescue";
+    if (std.mem.eql(u8, kind, "PM_RESCUE_MODIFIER_NODE")) return "inline_rescue";
+    if (std.mem.eql(u8, kind, "PM_ENSURE_NODE")) return "ensure";
+    if (std.mem.eql(u8, kind, "PM_RETRY_NODE")) return "retry";
+    if (std.mem.eql(u8, kind, "PM_RETURN_NODE")) return "return";
+    if (std.mem.eql(u8, kind, "PM_NEXT_NODE")) return "next";
+    if (std.mem.eql(u8, kind, "PM_BREAK_NODE")) return "break";
+    if (std.mem.eql(u8, kind, "PM_FORWARDING_SUPER_NODE")) return "super";
     return "";
 }
 
 fn trackedMethodName(name: []const u8) bool {
-    const names = [_][]const u8{ "each", "each_with_index", "each_with_object", "times", "map", "collect", "select", "filter", "reject", "reduce", "inject", "size", "length", "count", "new" };
+    const names = [_][]const u8{ "each", "each_with_index", "each_with_object", "times", "map", "collect", "select", "filter", "reject", "reduce", "inject", "size", "length", "count", "new", "include", "extend", "prepend", "attr_reader", "attr_writer", "attr_accessor", "private", "protected", "public", "module_function", "raise", "fail", "retry", "super" };
     for (names) |n| if (std.mem.eql(u8, name, n)) return true;
     return false;
 }
@@ -307,6 +314,7 @@ test "construct catalog fixture yields exact counts" {
         .{ "while", 1 },
         .{ "until", 1 },
         .{ "for", 1 },
+        .{ "break", 2 },
         .{ "each", 1 },
         .{ "times", 1 },
         .{ "map", 1 },
@@ -319,6 +327,7 @@ test "construct catalog fixture yields exact counts" {
         .{ "size", 1 },
         .{ "length", 1 },
         .{ "count", 1 },
+        .{ "raise", 1 },
         .{ "block", 9 },
         .{ "rescue", 1 },
     };

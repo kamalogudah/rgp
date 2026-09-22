@@ -2,6 +2,11 @@
 //! and topic reports.
 const std = @import("std");
 const storage = @import("../storage/sqlite.zig");
+const taxonomy = @import("../config/taxonomy.zig");
+
+const build_options = @import("config_options");
+const taxonomy_text = build_options.taxonomy_text;
+const idioms_text = build_options.idioms_text;
 
 /// User-facing filter values. These map directly to the storage query but keep
 /// the reporting layer independent of SQL parameter order.
@@ -73,13 +78,18 @@ pub fn compare(allocator: std.mem.Allocator, db: *storage.Database, constructs: 
 
 /// Report on an educational topic from `taxonomy.toml`.
 pub fn reportTopic(allocator: std.mem.Allocator, db: *storage.Database, topic_id: []const u8, filter: Filter) Error!TopicReport {
-    const topic = topicById(topic_id) orelse return error.UnknownTopic;
+    var loaded = taxonomy.load(allocator, taxonomy_text, idioms_text) catch |err| return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => error.UnknownTopic,
+    };
+    defer loaded.deinit();
+    const configured = loaded.topic(topic_id) orelse return error.UnknownTopic;
     const q = filter.toStorageQuery();
-    const statistics = try db.queryStatistics(allocator, topic.constructs, q);
+    const statistics = try db.queryStatistics(allocator, configured.constructs, q);
     const incomplete = try db.hasIncompleteRuns(q);
     return .{
-        .topic_id = try allocator.dupe(u8, topic.id),
-        .title = try allocator.dupe(u8, topic.title),
+        .topic_id = try allocator.dupe(u8, configured.id),
+        .title = try allocator.dupe(u8, configured.title),
         .filter = filter,
         .statistics = statistics,
         .incomplete = incomplete,
@@ -333,28 +343,6 @@ fn writeJsonString(writer: anytype, value: []const u8) !void {
     };
 }
 
-const Topic = struct { id: []const u8, title: []const u8, constructs: []const []const u8 };
-
-fn topicById(id: []const u8) ?Topic {
-    const topics = [_]Topic{
-        .{ .id = "conditionals", .title = "Conditionals", .constructs = &.{ "if", "unless", "case" } },
-        .{ .id = "loops_and_iteration", .title = "Loops and Iteration", .constructs = &.{ "while", "until", "for", "each", "times" } },
-        .{ .id = "collections", .title = "Collections", .constructs = &.{ "size", "length", "count", "map", "collect", "select", "filter", "reject", "reduce", "inject" } },
-        .{ .id = "collections.cardinality", .title = "Collection Cardinality", .constructs = &.{ "size", "length", "count" } },
-        .{ .id = "collections.transformation", .title = "Collection Transformation", .constructs = &.{ "map", "collect" } },
-        .{ .id = "collections.filtering", .title = "Collection Filtering", .constructs = &.{ "select", "filter", "reject" } },
-        .{ .id = "collections.aggregation", .title = "Collection Aggregation", .constructs = &.{ "reduce", "inject" } },
-        .{ .id = "methods", .title = "Methods", .constructs = &.{"def"} },
-        .{ .id = "oop", .title = "Object-Oriented Ruby", .constructs = &.{ "class", "module" } },
-        .{ .id = "blocks", .title = "Blocks", .constructs = &.{"block"} },
-        .{ .id = "exceptions", .title = "Exceptions", .constructs = &.{"rescue"} },
-    };
-    for (topics) |topic| {
-        if (std.mem.eql(u8, topic.id, id)) return topic;
-    }
-    return null;
-}
-
 test "report renders empty corpus with explicit zero denominator" {
     var db = try storage.Database.open(std.testing.allocator, ":memory:");
     defer db.deinit();
@@ -366,6 +354,19 @@ test "report renders empty corpus with explicit zero denominator" {
     try std.testing.expectEqual(@as(i64, 0), comparison.statistics[0].denominator);
     try std.testing.expect(comparison.statistics[0].percentage == null);
     try std.testing.expect(!comparison.incomplete);
+}
+
+test "checked-in taxonomy has fifteen sections, aliases, and mappings" {
+    var loaded = try taxonomy.load(std.testing.allocator, taxonomy_text, idioms_text);
+    defer loaded.deinit();
+    var sections: usize = 0;
+    for (loaded.topics) |topic| {
+        if (topic.parent == null) sections += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 15), sections);
+    try std.testing.expect(loaded.topic("loops-and-iteration") != null);
+    try std.testing.expectEqualStrings("collections.transformation", loaded.topicForConstruct("map").?);
+    try std.testing.expectEqualStrings("collections", loaded.topicForIdiom("map").?);
 }
 
 test "report topic maps taxonomy constructs" {

@@ -25,7 +25,7 @@ pub fn run(io: Io, allocator: std.mem.Allocator, args: []const []const u8, write
     if (!document.success()) return 1;
     const observations = try observation.extract(allocator, &document);
     defer allocator.free(observations);
-    const matches = try rules.detect(allocator, observations);
+    const matches = try rules.detectSource(allocator, source, observations);
     defer allocator.free(matches);
     if (json) {
         try writer.print("{{\"path\":\"{s}\",\"rule_version\":\"{s}\",\"matches\":[", .{ file_path, rules.rule_version });

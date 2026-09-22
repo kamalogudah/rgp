@@ -14,3 +14,82 @@ id = "map"
 title = "Map transformation"
 topic = "collections"
 required_constructs = ["map"]
+
+
+[[idiom]]
+id = "early_return"
+title = "Early return or loop guard"
+topic = "conditionals"
+required_constructs = ["return"]
+
+[[idiom]]
+id = "predicate_method"
+title = "Predicate method"
+topic = "methods"
+required_constructs = ["def"]
+
+[[idiom]]
+id = "bang_method"
+title = "Bang method"
+topic = "methods"
+required_constructs = ["def"]
+
+[[idiom]]
+id = "mixin"
+title = "Mixin inclusion"
+topic = "oop"
+required_constructs = ["include", "extend", "prepend"]
+
+[[idiom]]
+id = "class_macro"
+title = "Class macro"
+topic = "oop"
+required_constructs = ["attr_reader"]
+
+[[idiom]]
+id = "visibility"
+title = "Visibility directive"
+topic = "oop"
+required_constructs = ["private"]
+
+[[idiom]]
+id = "method_forwarding"
+title = "Method forwarding"
+topic = "methods"
+required_constructs = ["super"]
+
+[[idiom]]
+id = "rescue"
+title = "Rescue clause"
+topic = "exceptions"
+required_constructs = ["rescue"]
+
+[[idiom]]
+id = "inline_rescue"
+title = "Inline rescue"
+topic = "exceptions"
+required_constructs = ["inline_rescue"]
+
+[[idiom]]
+id = "ensure"
+title = "Ensure clause"
+topic = "exceptions"
+required_constructs = ["ensure"]
+
+[[idiom]]
+id = "raise"
+title = "Raise or fail"
+topic = "exceptions"
+required_constructs = ["raise", "fail"]
+
+[[idiom]]
+id = "retry"
+title = "Retry"
+topic = "exceptions"
+required_constructs = ["retry"]
+
+[[idiom]]
+id = "exception_as_control_flow"
+title = "Exception as control flow"
+topic = "exceptions"
+required_constructs = ["rescue", "raise"]

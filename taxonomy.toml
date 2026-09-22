@@ -2,6 +2,14 @@
 schema_version = 1
 
 [[topic]]
+id = "syntax_and_fundamentals"
+title = "Syntax & Fundamentals"
+
+[[topic]]
+id = "data_types"
+title = "Data Types"
+
+[[topic]]
 id = "conditionals"
 title = "Conditionals"
 constructs = ["if", "unless", "case"]
@@ -14,6 +22,7 @@ constructs = ["while", "until", "for", "each", "times"]
 [[topic]]
 id = "collections"
 title = "Collections"
+constructs = ["size", "length", "count", "map", "collect", "select", "filter", "reject", "reduce", "inject"]
 
 [[topic]]
 id = "collections.cardinality"
@@ -47,14 +56,38 @@ constructs = ["def"]
 [[topic]]
 id = "oop"
 title = "Object-Oriented Ruby"
-constructs = ["class", "module"]
+constructs = ["class", "module", "include", "extend", "prepend", "private", "protected", "public", "attr_reader", "attr_writer", "attr_accessor"]
 
 [[topic]]
 id = "blocks"
-title = "Blocks"
+title = "Blocks, Procs & Lambdas"
 constructs = ["block"]
 
 [[topic]]
 id = "exceptions"
 title = "Exceptions"
-constructs = ["rescue"]
+constructs = ["rescue", "inline_rescue", "ensure", "raise", "fail", "retry"]
+
+[[topic]]
+id = "pattern_matching"
+title = "Pattern Matching"
+
+[[topic]]
+id = "metaprogramming"
+title = "Metaprogramming"
+
+[[topic]]
+id = "files_and_dependencies"
+title = "Files & Dependencies"
+
+[[topic]]
+id = "concurrency"
+title = "Concurrency"
+
+[[topic]]
+id = "testing"
+title = "Testing"
+
+[[topic]]
+id = "real_world_ruby_idioms"
+title = "Real-World Ruby Idioms"
