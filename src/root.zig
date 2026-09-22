@@ -23,6 +23,7 @@ pub const taxonomy = @import("config/taxonomy.zig");
 pub const corpus = @import("corpus/root.zig");
 /// CLI command adapters.
 pub const cli = @import("cli/root.zig");
+pub const learning = @import("learning.zig");
 
 // Force analysis of the repository discovery module so its declarations and
 // tests are compiled and exercised by the deterministic test build.

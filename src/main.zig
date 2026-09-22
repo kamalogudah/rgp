@@ -16,6 +16,7 @@ const usage =
     "  compare <construct>...  Compare construct counts and percentages\n" ++
     "  report [topic]          Report on a taxonomy topic\n" ++
     "  examples <construct>     Retrieve cited source examples\n" ++
+    "  learn [lesson]           Follow the offline Ruby fundamentals path\n" ++
     "  idioms <file>           Report conservative idiom matches\n" ++
     "  corpus                  Manage the analyzed corpus\n" ++
     "  parse <file>            Parse a Ruby file and emit JSON\n" ++
@@ -69,6 +70,9 @@ fn run(args: []const []const u8, writer: *Io.Writer, io: Io, allocator: std.mem.
     }
     if (args.len > 0 and std.mem.eql(u8, args[0], "examples")) {
         return rgp.cli.examples.run(io, allocator, args[1..], writer);
+    }
+    if (args.len > 0 and std.mem.eql(u8, args[0], "learn")) {
+        return rgp.cli.learn.run(io, allocator, args[1..], writer);
     }
     if (args.len > 0 and std.mem.eql(u8, args[0], "idioms")) {
         return rgp.cli.idioms.run(io, allocator, args[1..], writer);
