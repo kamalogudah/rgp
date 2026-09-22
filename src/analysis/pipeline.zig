@@ -120,6 +120,12 @@ pub fn analyze(allocator: std.mem.Allocator, io: Io, db: *storage.Database, targ
 
     var observations = std.ArrayList(storage.Observation).empty;
     var idiom_matches = std.ArrayList(storage.IdiomMatch).empty;
+    var construct_ids = std.StringHashMap(?i64).init(allocator);
+    defer {
+        var construct_iterator = construct_ids.iterator();
+        while (construct_iterator.next()) |entry| allocator.free(entry.key_ptr.*);
+        construct_ids.deinit();
+    }
     defer idiom_matches.deinit(allocator);
     defer {
         for (observations.items) |*obs| {
@@ -169,7 +175,7 @@ pub fn analyze(allocator: std.mem.Allocator, io: Io, db: *storage.Database, targ
         }
 
         try reanalyzed_file_ids.append(allocator, file_record.id);
-        const file_result = try analyzeFile(allocator, db, source, file.path, repo_id, commit_id, file_record.id, &observations, &idiom_matches);
+        const file_result = try analyzeFile(allocator, db, source, file.path, repo_id, commit_id, file_record.id, &observations, &idiom_matches, &construct_ids);
         try file_results.append(allocator, file_result);
     }
 
@@ -222,7 +228,7 @@ fn filesFailedBeforePersist(results: []const FileResult) bool {
     return false;
 }
 
-fn analyzeFile(allocator: std.mem.Allocator, db: *storage.Database, source: []const u8, path: []const u8, repository_id: i64, commit_id: i64, file_id: i64, observations: *std.ArrayList(storage.Observation), idiom_matches: *std.ArrayList(storage.IdiomMatch)) Error!FileResult {
+fn analyzeFile(allocator: std.mem.Allocator, db: *storage.Database, source: []const u8, path: []const u8, repository_id: i64, commit_id: i64, file_id: i64, observations: *std.ArrayList(storage.Observation), idiom_matches: *std.ArrayList(storage.IdiomMatch), construct_ids: *std.StringHashMap(?i64)) Error!FileResult {
     var document = prism.parse(allocator, source, .{ .path = path }) catch |err| {
         const message = try std.fmt.allocPrint(allocator, "cannot parse `{s}`: {s}", .{ path, @errorName(err) });
         return .{ .path = try allocator.dupe(u8, path), .status = .failed, .observations = 0, .message = message };
@@ -244,7 +250,13 @@ fn analyzeFile(allocator: std.mem.Allocator, db: *storage.Database, source: []co
     for (extracted) |obs| {
         const raw_json = try obs.json(allocator);
         errdefer allocator.free(raw_json);
-        const construct_id = try constructIdFor(db, obs.construct);
+        const construct_id = if (construct_ids.get(obs.construct)) |cached| cached else blk: {
+            const id = try constructIdFor(db, obs.construct);
+            // The parser document is released after this file, so the cache
+            // owns a stable copy of each construct key.
+            try construct_ids.put(try allocator.dupe(u8, obs.construct), id);
+            break :blk id;
+        };
         const name_copy: ?[]u8 = if (obs.name) |n| try allocator.dupe(u8, n) else null;
         errdefer if (name_copy) |n| allocator.free(n);
         try observations.append(allocator, .{

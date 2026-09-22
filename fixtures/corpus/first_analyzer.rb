@@ -24,7 +24,7 @@
 #   count:    1
 #   rescue:   1
 #   block:    9
-#   total observations: 31
+#   total observations: 34
 #
 # This fixture is an original RGP regression artifact. It does not depend on
 # any external repository and is analyzed offline by the release gate test.

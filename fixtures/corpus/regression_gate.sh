@@ -65,7 +65,7 @@ fresh_run=$(run_cli "$fresh" analyze)
 }
 
 # The first analyzer flow and the complete hand-reviewed catalog are both
-# golden. The latter also asserts the 31-observation denominator and every
+# golden. The latter also asserts the 34-observation denominator and every
 # expected construct count, including the nine block observations.
 assert_golden "$incremental" compare_each_for.json compare each for --json
 assert_golden "$incremental" compare_times_while.json compare times while --json
@@ -73,7 +73,7 @@ assert_golden "$incremental" compare_cardinality.json compare size count length 
 assert_golden "$incremental" report_conditionals.json report conditionals --json
 assert_golden "$incremental" report_collections.json report collections --json
 all_counts=$(run_cli "$incremental" compare module class def if unless case while until for each times map collect select filter reject reduce inject size length count rescue block --json)
-[[ "$all_counts" == *'"denominator":31'* ]] || { echo "regression gate: aggregate denominator is not 31" >&2; exit 1; }
+[[ "$all_counts" == *'"denominator":34'* ]] || { echo "regression gate: aggregate denominator is not 34" >&2; exit 1; }
 while IFS="=" read -r construct expected; do
     [[ -z "$construct" ]] && continue
     [[ "$all_counts" == *"\"construct\":\"$construct\""*"\"count\":$expected,"* ]] || { echo "regression gate: expected $construct=$expected" >&2; exit 1; }

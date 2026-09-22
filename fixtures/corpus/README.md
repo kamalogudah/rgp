@@ -53,7 +53,7 @@ For `first_analyzer.rb`:
 | count | 1 |
 | rescue | 1 |
 | block | 9 |
-| **Total observations** | **31** |
+| **Total observations** | **34** |
 
 ## Running the regression gate
 
