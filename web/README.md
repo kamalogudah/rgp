@@ -11,3 +11,6 @@ logic; those remain in the Zig core and gateway.
 Serve this directory with any static file server and provide an API adapter for
 the gateway. For an alternate learner, set `window.RGP_LEARNER_ID` before
 loading `app.js`.
+
+The reproducible deployment and operations runbook is
+[`docs/deployment.md`](../docs/deployment.md).

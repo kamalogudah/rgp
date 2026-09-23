@@ -43,7 +43,7 @@ if [[ "${1:-check}" == "package" ]]; then
     trap 'rm -rf "$stage"' EXIT
     mkdir -p "$stage/$name/docs" "$stage/$name/vendor/libprism"
     cp zig-out/bin/rgp README.md "$stage/$name/"
-    cp docs/release.md docs/libprism.md docs/configuration.md docs/constructs.md "$stage/$name/docs/"
+    cp docs/release.md docs/deployment.md docs/libprism.md docs/configuration.md docs/constructs.md "$stage/$name/docs/"
     cp vendor/libprism/LICENSE.md "$stage/$name/vendor/libprism/"
     tar -czf "dist/$name.tar.gz" -C "$stage" "$name"
     echo "release artifact: dist/$name.tar.gz"

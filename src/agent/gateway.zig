@@ -284,13 +284,25 @@ pub const Gateway = struct {
         const db = self.db orelse return error.DatabaseRequired;
         const learner = integerField(object, "learner_id") orelse return error.InvalidInput;
         const states = try db.competencyStates(self.allocator, learner);
-        defer { for (states) |state| self.allocator.free(state.key); self.allocator.free(states); }
+        defer {
+            for (states) |state| self.allocator.free(state.key);
+            self.allocator.free(states);
+        }
         const completed = try db.completedLessonKeys(self.allocator, learner);
-        defer { for (completed) |key| self.allocator.free(key); self.allocator.free(completed); }
+        defer {
+            for (completed) |key| self.allocator.free(key);
+            self.allocator.free(completed);
+        }
         try writer.print("{{\"learner_id\":{d},\"competencies\":[", .{learner});
-        for (states, 0..) |state, i| { if (i > 0) try writer.writeByte(','); try writer.print("{{\"key\":\"{s}\",\"exposure\":{d},\"practice\":{d},\"demonstrated\":{d}}}", .{ state.key, state.exposure, state.practice, state.demonstrated }); }
+        for (states, 0..) |state, i| {
+            if (i > 0) try writer.writeByte(',');
+            try writer.print("{{\"key\":\"{s}\",\"exposure\":{d},\"practice\":{d},\"demonstrated\":{d}}}", .{ state.key, state.exposure, state.practice, state.demonstrated });
+        }
         try writer.writeAll("],\"completed_lessons\":[");
-        for (completed, 0..) |key, i| { if (i > 0) try writer.writeByte(','); try writer.print("\"{s}\"", .{key}); }
+        for (completed, 0..) |key, i| {
+            if (i > 0) try writer.writeByte(',');
+            try writer.print("\"{s}\"", .{key});
+        }
         try writer.writeAll("]}");
     }
 
@@ -584,7 +596,6 @@ test "generated exercise gateway rejects unsupported contracts and returns revie
     try std.testing.expect(std.mem.indexOf(u8, response.output, "reviewed-static") != null);
 }
 
-
 test "gateway report operation uses the same provenance path as compare" {
     var db = try storage.Database.open(std.testing.allocator, ":memory:");
     defer db.deinit();
@@ -600,4 +611,45 @@ test "gateway report operation uses the same provenance path as compare" {
     try std.testing.expect(response.ok);
     try std.testing.expect(std.mem.indexOf(u8, response.output, "\"count\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, response.output, "\"classifier_version\":\"c\"") != null);
+}
+
+test "end-to-end learner workflow isolates progress while retaining analysis evidence" {
+    var db = try storage.Database.open(std.testing.allocator, ":memory:");
+    defer db.deinit();
+    const learner_one = try db.upsertLearner("e2e-one", "Ada", .beginner);
+    const learner_two = try db.upsertLearner("e2e-two", "Grace", .beginner);
+    _ = learner_two;
+    const repo = try db.addRepository("e2e-fixture");
+    const commit = try db.addCommit(repo, "e2e-commit");
+    const file = try db.addFile(commit, "lib/users.rb", "e2e-source");
+    const map = try db.addConstruct("map");
+    _ = try db.persistCompleted(.{ .repository_id = repo, .commit_id = commit, .rgp_version = "e2e-rgp", .prism_version = "1.9.0", .classifier_version = "e2e-classifier", .taxonomy_version = "e2e-taxonomy" }, &.{.{ .repository_id = repo, .commit_id = commit, .file_id = file, .start_offset = 0, .end_offset = 31, .line = 1, .column = 1, .node_kind = "PM_CALL_NODE", .raw_json = "{\"name\":\"map\"}", .construct_id = map, .name = "map" }});
+    var gateway = Gateway.init(std.testing.allocator, &db);
+    defer gateway.deinit();
+    var evidence = try gateway.dispatch(.{ .tool = "rgp.get_stats", .input = "{\"construct\":\"map\"}" });
+    defer evidence.deinit(std.testing.allocator);
+    try std.testing.expect(evidence.ok);
+    try std.testing.expect(std.mem.indexOf(u8, evidence.output, "\"count\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, evidence.output, "e2e-rgp") != null);
+    var lesson = try gateway.dispatch(.{ .tool = "rgp.get_lesson", .input = "{\"id\":\"arrays\"}" });
+    defer lesson.deinit(std.testing.allocator);
+    try std.testing.expect(lesson.ok);
+    var submission = try gateway.dispatch(.{ .tool = "rgp.submit_exercise", .input = "{\"exercise_id\":\"collections.map-names\",\"learner_id\":1,\"source\":\"users.map { |user| user.name }\",\"source_sha256\":\"e2e-submission\"}" });
+    defer submission.deinit(std.testing.allocator);
+    try std.testing.expect(submission.ok);
+    try std.testing.expect(std.mem.indexOf(u8, submission.output, "\"outcome\":\"idiomatic_correct\"") != null);
+    var progress = try gateway.dispatch(.{ .tool = "rgp.record_progress", .input = "{\"learner_id\":1,\"lesson_id\":\"arrays\",\"status\":\"completed\",\"position\":9}" });
+    defer progress.deinit(std.testing.allocator);
+    try std.testing.expect(progress.ok);
+    var first_progress = try gateway.dispatch(.{ .tool = "rgp.get_progress", .input = "{\"learner_id\":1}" });
+    defer first_progress.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, first_progress.output, "\"learner_id\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_progress.output, "arrays") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_progress.output, "enumerable_transformation") != null);
+    var second_progress = try gateway.dispatch(.{ .tool = "rgp.get_progress", .input = "{\"learner_id\":2}" });
+    defer second_progress.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, second_progress.output, "\"learner_id\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second_progress.output, "arrays") == null);
+    try std.testing.expect(std.mem.indexOf(u8, second_progress.output, "enumerable_transformation") == null);
+    _ = learner_one;
 }

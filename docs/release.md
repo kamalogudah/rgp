@@ -99,3 +99,10 @@ configuration fixtures needed for offline builds.
 3. Run `bash scripts/release-check.sh package` and record SHA-256 checksums.
 4. Inspect the archive contents and attach the archive plus checksum file.
 5. Publish the source revision, artifact checksums, target, and limitations.
+
+## Web/API workflow and learner isolation
+
+`zig build test` runs the gateway end-to-end test for analysis → evidence →
+lesson → submission → progress and checks that a second learner has empty
+progress. Deployment, migration, backup, configuration, and optional agent
+procedures are in [`deployment.md`](deployment.md).
